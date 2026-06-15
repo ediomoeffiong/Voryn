@@ -1,0 +1,173 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  SOLD_OUT
+  CANCELLED
+  COMPLETED
+}
+
+enum DiscoveryMode {
+  LOCAL
+  ONLINE
+  GLOBAL
+}
+
+enum EventFormat {
+  IN_PERSON
+  VIRTUAL
+  HYBRID
+}
+
+enum EventBadgeKind {
+  FEATURED
+  TRENDING
+  RECOMMENDED
+  EDITORS_PICK
+  POPULAR
+  RECENTLY_ADDED
+}
+
+model City {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  country     String
+  countryCode String
+  region      String
+  timezone    String
+  heroImage   String
+  latitude    Decimal  @db.Decimal(9, 6)
+  longitude   Decimal  @db.Decimal(9, 6)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  events Event[]
+
+  @@index([countryCode, slug])
+  @@index([region])
+}
+
+model Organizer {
+  id                    String   @id @default(cuid())
+  name                  String
+  slug                  String   @unique
+  profileImage          String
+  coverImage            String
+  bio                   String
+  website               String?
+  followersCount        Int      @default(0)
+  totalAttendeesHosted  Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  events     Event[]
+  followers  OrganizerFollow[]
+  socialLink OrganizerSocialLink[]
+
+  @@index([followersCount])
+}
+
+model OrganizerSocialLink {
+  id          String    @id @default(cuid())
+  organizerId String
+  platform    String
+  url         String
+  organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+
+  @@unique([organizerId, platform])
+}
+
+model Event {
+  id               String        @id @default(cuid())
+  title            String
+  slug             String        @unique
+  summary          String
+  category         String
+  type             String
+  mode             DiscoveryMode
+  format           EventFormat
+  status           EventStatus   @default(DRAFT)
+  startsAt         DateTime
+  endsAt           DateTime?
+  venue            String
+  country          String
+  currency         String?
+  priceLabel       String
+  capacity         Int?
+  attendeeCount    Int           @default(0)
+  rsvpCount        Int           @default(0)
+  ticketSalesCount Int           @default(0)
+  publishedAt      DateTime?
+  cancelledAt      DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  cityId      String
+  organizerId String
+  city        City      @relation(fields: [cityId], references: [id])
+  organizer   Organizer @relation(fields: [organizerId], references: [id])
+  media       EventMedia?
+  badges      EventBadge[]
+
+  @@index([status, startsAt])
+  @@index([mode, status, startsAt])
+  @@index([cityId, status, startsAt])
+  @@index([organizerId, status, startsAt])
+  @@index([category, status, startsAt])
+}
+
+model EventMedia {
+  id              String  @id @default(cuid())
+  eventId          String  @unique
+  coverImage       String
+  heroImage        String
+  thumbnail        String
+  gallery          String[]
+  videoTrailer     String?
+  organizerMedia   String[]
+  event            Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+}
+
+model EventBadge {
+  id        String         @id @default(cuid())
+  eventId   String
+  kind      EventBadgeKind
+  startsAt  DateTime?
+  endsAt    DateTime?
+  createdAt DateTime       @default(now())
+  event     Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, kind])
+  @@index([kind, startsAt, endsAt])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+
+  follows OrganizerFollow[]
+}
+
+model OrganizerFollow {
+  id          String    @id @default(cuid())
+  userId      String
+  organizerId String
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizerId])
+  @@index([organizerId, createdAt])
+}
