@@ -153,6 +153,14 @@ app.get("/api/search", (request, response) => {
   });
 });
 
+app.get("/", (_request, response) => {
+  response.json({ ok: true, message: "Welcome to Voryn API. Health endpoint at /api/health." });
+});
+
+app.get("/api", (_request, response) => {
+  response.json({ ok: true, message: "Voryn API is active. Check /api/health for system status." });
+});
+
 app.use((_request, response) => {
   response.status(404).json({ error: "Route not found" });
 });

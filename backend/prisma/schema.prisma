@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "mongodb"
   url      = env("DATABASE_URL")
 }
 
@@ -37,7 +37,7 @@ enum EventBadgeKind {
 }
 
 model City {
-  id          String   @id @default(cuid())
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
   name        String
   slug        String   @unique
   country     String
@@ -45,8 +45,8 @@ model City {
   region      String
   timezone    String
   heroImage   String
-  latitude    Decimal  @db.Decimal(9, 6)
-  longitude   Decimal  @db.Decimal(9, 6)
+  latitude    Float
+  longitude   Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -57,7 +57,7 @@ model City {
 }
 
 model Organizer {
-  id                    String   @id @default(cuid())
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
   name                  String
   slug                  String   @unique
   profileImage          String
@@ -77,8 +77,8 @@ model Organizer {
 }
 
 model OrganizerSocialLink {
-  id          String    @id @default(cuid())
-  organizerId String
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  organizerId String    @db.ObjectId
   platform    String
   url         String
   organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)
@@ -87,7 +87,7 @@ model OrganizerSocialLink {
 }
 
 model Event {
-  id               String        @id @default(cuid())
+  id               String        @id @default(auto()) @map("_id") @db.ObjectId
   title            String
   slug             String        @unique
   summary          String
@@ -112,8 +112,8 @@ model Event {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  cityId      String
-  organizerId String
+  cityId      String    @db.ObjectId
+  organizerId String    @db.ObjectId
   city        City      @relation(fields: [cityId], references: [id])
   organizer   Organizer @relation(fields: [organizerId], references: [id])
   media       EventMedia?
@@ -127,8 +127,8 @@ model Event {
 }
 
 model EventMedia {
-  id              String  @id @default(cuid())
-  eventId          String  @unique
+  id              String  @id @default(auto()) @map("_id") @db.ObjectId
+  eventId          String  @unique @db.ObjectId
   coverImage       String
   heroImage        String
   thumbnail        String
@@ -139,8 +139,8 @@ model EventMedia {
 }
 
 model EventBadge {
-  id        String         @id @default(cuid())
-  eventId   String
+  id        String         @id @default(auto()) @map("_id") @db.ObjectId
+  eventId   String         @db.ObjectId
   kind      EventBadgeKind
   startsAt  DateTime?
   endsAt    DateTime?
@@ -152,7 +152,7 @@ model EventBadge {
 }
 
 model User {
-  id        String   @id @default(cuid())
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
   email     String   @unique
   name      String?
   createdAt DateTime @default(now())
@@ -161,9 +161,9 @@ model User {
 }
 
 model OrganizerFollow {
-  id          String    @id @default(cuid())
-  userId      String
-  organizerId String
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId      String    @db.ObjectId
+  organizerId String    @db.ObjectId
   createdAt   DateTime  @default(now())
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)

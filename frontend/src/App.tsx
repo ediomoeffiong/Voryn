@@ -105,9 +105,9 @@ function useAsync<T>(load: () => Promise<T>, deps: unknown[]) {
 
 const defaultNavigation: NavigationItem[] = [
   { label: "Near You", href: "/search?scope=near-you", kind: "nearby" },
-  { label: "Lagos Events", href: "/lagos", kind: "capital" },
-  { label: "Abuja Events", href: "/abuja", kind: "capital" },
-  { label: "Global Events", href: "/search?mode=global", kind: "global" }
+  { label: "Lagos", href: "/lagos", kind: "capital" },
+  { label: "Abuja", href: "/abuja", kind: "capital" },
+  { label: "Global", href: "/search?mode=global", kind: "global" }
 ];
 
 function useStoredInterests() {
@@ -780,6 +780,10 @@ function EventPage() {
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Event not found"} />;
 
+  return <EventPageContent data={data} />;
+}
+
+function EventPageContent({ data }: { data: { event: Event; related: Event[]; jsonLd: unknown } }) {
   const { event, related } = data;
   const [liveEvent, setLiveEvent] = useState(event);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
@@ -930,6 +934,10 @@ function OrganizerPage() {
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Organizer not found"} />;
 
+  return <OrganizerPageContent data={data} />;
+}
+
+function OrganizerPageContent({ data }: { data: { organizer: Organizer; upcoming: Event[]; past: Event[] } }) {
   const { organizer, upcoming, past } = data;
   const [liveOrganizer, setLiveOrganizer] = useState(organizer);
   const shownOrganizer = liveOrganizer.slug === organizer.slug ? liveOrganizer : organizer;
@@ -1154,6 +1162,12 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
     return () => window.removeEventListener("voryn:dashboard", handler);
   }, []);
 
+  useEffect(() => {
+    if (error?.includes("401")) {
+      logout();
+    }
+  }, [error, logout]);
+
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
 
@@ -1346,6 +1360,12 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
   const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, tab]);
   const tabs = ["Overview", "Favorites", "Upcoming", "Past", "History", "Tickets", "Notifications", "Reviews"];
 
+  useEffect(() => {
+    if (error?.includes("401")) {
+      logout();
+    }
+  }, [error, logout]);
+
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
 
@@ -1469,6 +1489,12 @@ function AdminDashboardPage() {
 
 function AdminDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
   const { data, error, loading } = useAsync<AdminDashboard>(() => getAdminDashboard(token), [token]);
+
+  useEffect(() => {
+    if (error?.includes("401")) {
+      logout();
+    }
+  }, [error, logout]);
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Admin unavailable"} />;
   return (
