@@ -37,11 +37,14 @@ import {
   UsersRound
 } from "lucide-react";
 import {
+  adminLogin,
+  adminSignup,
   createOrganizerEvent,
   deleteOrganizerEvent,
   downloadTicket,
   exportAttendees,
   favoriteEvent,
+  followOrganizerFromDashboard,
   followOrganizer,
   getAdminDashboard,
   getCity,
@@ -58,8 +61,12 @@ import {
   searchEvents,
   sendAnnouncement,
   signup,
+  switchDashboard,
   updateNotifications,
-  updateOrganizerEvent
+  updateOrganizerEvent,
+  updateOrganizerProfile,
+  updateParticipantProfile,
+  removeFavoriteEvent
 } from "./api";
 import type {
   AdminDashboard,
@@ -1077,9 +1084,12 @@ function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: Ret
     return <LoadingScreen />;
   }
   if (!auth.user || !auth.token) {
-    return <AuthPage defaultRole={allowed.includes("organizer") ? "organizer" : "participant"} />;
+    return <AuthPage defaultRole={allowed.includes("organizer") ? "organizer" : "participant"} adminOnly={allowed.length === 1 && allowed[0] === "admin"} />;
   }
-  if (!allowed.includes(auth.user.role)) {
+  const memberAllowed =
+    (allowed.includes("participant") || allowed.includes("organizer")) &&
+    (auth.user.role === "participant" || auth.user.role === "organizer");
+  if (!allowed.includes(auth.user.role) && !memberAllowed) {
     return (
       <main>
         <BrandNav />
@@ -1096,13 +1106,23 @@ function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: Ret
   return <>{children(auth)}</>;
 }
 
-function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role, "guest"> }) {
+function dashboardPath(user: User) {
+  return user.lastDashboard === "organizer" ? "/organizer" : user.lastDashboard === "admin" ? "/admin" : "/participant";
+}
+
+function AuthPage({
+  defaultRole = "participant",
+  adminOnly = false
+}: {
+  defaultRole?: Exclude<Role, "guest">;
+  adminOnly?: boolean;
+}) {
   const auth = useAuthSession();
   const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "signup">("login");
-  const [role, setRole] = useState<Exclude<Role, "guest">>(defaultRole);
+  const [role, setRole] = useState<Exclude<Role, "guest">>(adminOnly ? "admin" : defaultRole === "admin" ? "participant" : defaultRole);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(defaultRole === "organizer" ? "organizer@voryn.test" : "participant@voryn.test");
+  const [email, setEmail] = useState(adminOnly ? "admin@voryn.test" : defaultRole === "organizer" ? "organizer@voryn.test" : "participant@voryn.test");
   const [password, setPassword] = useState("password");
   const [error, setError] = useState("");
 
@@ -1112,26 +1132,29 @@ function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role,
     try {
       const result =
         mode === "login"
-          ? await login({ email, password })
-          : await signup({ name: name || email.split("@")[0], email, password, role });
+          ? adminOnly
+            ? await adminLogin({ email, password })
+            : await login({ email, password })
+          : adminOnly
+            ? await adminSignup({ name: name || email.split("@")[0], email, password })
+            : await signup({ name: name || email.split("@")[0], email, password, role });
       auth.setAuth(result.token, result.user);
-      const dest = result.user.role === "organizer" ? "/organizer" : result.user.role === "admin" ? "/admin" : "/participant";
-      navigate(dest, { replace: true });
+      navigate(dashboardPath(result.user), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     }
   };
 
-  const destination = auth.user?.role === "organizer" ? "/organizer" : auth.user?.role === "admin" ? "/admin" : "/participant";
+  const destination = auth.user ? dashboardPath(auth.user) : "/participant";
 
   return (
     <main>
       <BrandNav />
       <section className="portal-hero auth-hero">
         <div>
-          <p className="eyebrow">Authentication</p>
-          <h1>Sign in to the right side of Voryn.</h1>
-          <p>Guests can browse and search. Participants register and manage tickets. Organizers manage events. Admins manage the platform.</p>
+          <p className="eyebrow">{adminOnly ? "Admin access" : "Authentication"}</p>
+          <h1>{adminOnly ? "Admin sign in lives here." : "Sign in to the right side of Voryn."}</h1>
+          <p>{adminOnly ? "Admin registration and login are separated from normal user signup." : "Guests can browse and search. Participants register and manage tickets. Organizers manage events."}</p>
           {auth.user ? (
             <Link className="hero-link" to={destination}>
               Continue to dashboard <ArrowRight size={18} />
@@ -1150,25 +1173,43 @@ function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role,
           {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /> : null}
           <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
           <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
-          {mode === "signup" ? (
+          {mode === "signup" && !adminOnly ? (
             <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)}>
               <option value="participant">Participant</option>
               <option value="organizer">Organizer</option>
-              <option value="admin">Admin</option>
             </select>
           ) : null}
           {error ? <small className="form-error">{error}</small> : null}
           <button className="solid-dark" type="submit">
             <Shield size={18} /> {mode === "login" ? "Log in" : "Create account"}
           </button>
-          <small>Demo logins: participant@voryn.test, organizer@voryn.test, admin@voryn.test. Password: password.</small>
+          <small>{adminOnly ? "Admin login: admin@voryn.test / password." : "User logins: participant@voryn.test or organizer@voryn.test / password."}</small>
         </form>
       </section>
     </main>
   );
 }
 
-function DashboardNav({ title, role, logout }: { title: string; role: string; logout: () => void }) {
+function DashboardNav({
+  title,
+  role,
+  token,
+  setAuth,
+  logout
+}: {
+  title: string;
+  role: string;
+  token: string;
+  setAuth: (token: string, user: User) => void;
+  logout: () => void;
+}) {
+  const navigate = useNavigate();
+  const switchTo = async (dashboard: User["lastDashboard"]) => {
+    const result = await switchDashboard(token, dashboard);
+    setAuth(token, result.user);
+    navigate(dashboardPath(result.user));
+  };
+
   return (
     <header className="dashboard-topbar">
       <Link to="/" className="brand-mark">
@@ -1178,6 +1219,12 @@ function DashboardNav({ title, role, logout }: { title: string; role: string; lo
       <strong>{title}</strong>
       <div className="dashboard-role">
         <span>{role}</span>
+        {role !== "admin" ? (
+          <>
+            <button onClick={() => switchTo("participant")}>Participant</button>
+            <button onClick={() => switchTo("organizer")}>Organizer</button>
+          </>
+        ) : null}
         <button onClick={logout}>
           <LogOut size={17} /> Log out
         </button>
@@ -1199,13 +1246,14 @@ function MetricPanel({ icon: Icon, label, value }: { icon: React.ElementType; la
 function OrganizerDashboardPage() {
   return (
     <AuthGate allowed={["organizer", "admin"]}>
-      {(auth) => <OrganizerDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+      {(auth) => <OrganizerDashboardContent token={auth.token} user={auth.user!} setAuth={auth.setAuth} logout={auth.logout} />}
     </AuthGate>
   );
 }
 
-function OrganizerDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
   const [tab, setTab] = useState("Overview");
+  const [refreshKey, setRefreshKey] = useState(0);
   const [draft, setDraft] = useState({
     title: "New Voryn Event",
     citySlug: "lagos",
@@ -1216,18 +1264,20 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
     priceLabel: "Free",
     summary: "A new event for the Voryn community."
   });
-  const { data, error, loading } = useAsync<OrganizerDashboard>(() => getOrganizerDashboard(token), [token, tab]);
-  const tabs = ["Overview", "My Events", "Create Event", "Analytics", "Attendees", "Revenue", "Settings"];
-
-  const reloadWith = (dashboard: OrganizerDashboard) => {
-    window.dispatchEvent(new CustomEvent("voryn:dashboard", { detail: dashboard }));
-  };
+  const [profile, setProfile] = useState({ name: user.name, organizerName: "", bio: "", website: "" });
+  const { data, error, loading } = useAsync<OrganizerDashboard>(() => getOrganizerDashboard(token), [token, tab, refreshKey]);
+  const tabs = ["Overview", "My Events", "Create Event", "Analytics", "Attendees", "Revenue", "Profile", "Settings"];
 
   useEffect(() => {
-    const handler = () => setTab((current) => current);
-    window.addEventListener("voryn:dashboard", handler);
-    return () => window.removeEventListener("voryn:dashboard", handler);
-  }, []);
+    if (data) {
+      setProfile({
+        name: data.user.name,
+        organizerName: data.organizer.name,
+        bio: data.organizer.bio,
+        website: data.organizer.website
+      });
+    }
+  }, [data?.organizer.slug]);
 
   useEffect(() => {
     if (error?.includes("401")) {
@@ -1241,19 +1291,19 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
   const createEvent = async (event: React.FormEvent) => {
     event.preventDefault();
     const result = await createOrganizerEvent(token, draft);
-    reloadWith(result.dashboard);
+    setRefreshKey((value) => value + 1);
     setTab("My Events");
   };
 
   const announce = async () => {
     const first = data.events[0];
     if (!first) return;
-    const result = await sendAnnouncement(token, {
+    await sendAnnouncement(token, {
       eventSlug: first.slug,
       subject: "Event update",
       message: "A new update has been sent to registered attendees."
     });
-    reloadWith(result.dashboard);
+    setRefreshKey((value) => value + 1);
   };
 
   const exportCsv = async () => {
@@ -1269,7 +1319,7 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
 
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Organizer Portal" role={user.role} logout={logout} />
+      <DashboardNav title="Organizer Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
           <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
@@ -1312,7 +1362,7 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
                   <button
                     onClick={async () => {
                       await updateOrganizerEvent(token, event.slug, { status: event.status === "published" ? "sold-out" : "published" });
-                      setTab("Analytics");
+                      setRefreshKey((value) => value + 1);
                     }}
                   >
                     <Edit3 size={16} />
@@ -1320,7 +1370,7 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
                   <button
                     onClick={async () => {
                       await deleteOrganizerEvent(token, event.slug);
-                      setTab("Overview");
+                      setRefreshKey((value) => value + 1);
                     }}
                   >
                     <Trash2 size={16} />
@@ -1401,11 +1451,39 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
           </div>
         ) : null}
 
+        {tab === "Profile" ? (
+          <form
+            className="portal-card form-grid"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              await updateOrganizerProfile(token, profile);
+              setRefreshKey((value) => value + 1);
+            }}
+          >
+            <input value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} placeholder="Account name" />
+            <input value={profile.organizerName} onChange={(event) => setProfile({ ...profile, organizerName: event.target.value })} placeholder="Organizer name" />
+            <input value={profile.website} onChange={(event) => setProfile({ ...profile, website: event.target.value })} placeholder="Website" />
+            <textarea value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} />
+            <button className="solid-dark" type="submit">
+              <Settings size={18} /> Save profile
+            </button>
+          </form>
+        ) : null}
+
         {tab === "Settings" ? (
-          <div className="portal-card">
-            <Settings size={22} />
-            <h2>Organizer settings</h2>
-            <p>Profile, organizer brand, payout, reminder, and SMS-provider settings are ready to connect to persistent storage.</p>
+          <div className="portal-card settings-list">
+            <label>
+              <input type="checkbox" checked readOnly />
+              Email announcements enabled
+            </label>
+            <label>
+              <input type="checkbox" checked readOnly />
+              Push announcement channel enabled
+            </label>
+            <label>
+              <input type="checkbox" checked readOnly />
+              SMS-ready reminder architecture enabled
+            </label>
           </div>
         ) : null}
       </section>
@@ -1416,16 +1494,22 @@ function OrganizerDashboardContent({ token, user, logout }: { token: string; use
 function ParticipantDashboardPage() {
   return (
     <AuthGate allowed={["participant", "admin"]}>
-      {(auth) => <ParticipantDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+      {(auth) => <ParticipantDashboardContent token={auth.token} user={auth.user!} setAuth={auth.setAuth} logout={auth.logout} />}
     </AuthGate>
   );
 }
 
-function ParticipantDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
   const [tab, setTab] = useState("Overview");
   const [ticketText, setTicketText] = useState("");
-  const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, tab]);
-  const tabs = ["Overview", "Favorites", "Upcoming", "Past", "History", "Tickets", "Notifications", "Reviews"];
+  const [refreshKey, setRefreshKey] = useState(0);
+  const [profile, setProfile] = useState({ name: user.name, email: user.email });
+  const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, tab, refreshKey]);
+  const tabs = ["Overview", "Favorites", "Upcoming", "Past", "History", "Tickets", "Notifications", "Reviews", "Profile"];
+
+  useEffect(() => {
+    if (data) setProfile({ name: data.user.name, email: data.user.email });
+  }, [data?.user.id]);
 
   useEffect(() => {
     if (error?.includes("401")) {
@@ -1440,7 +1524,7 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
 
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Participant Portal" role={user.role} logout={logout} />
+      <DashboardNav title="Participant Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
           <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
@@ -1463,7 +1547,19 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
         ) : null}
         {tab === "Favorites" ? (
           <div className="event-grid compact">
-            {data.favorites.map((event) => <EventCard event={event} key={event.id} />)}
+            {data.favorites.map((event) => (
+              <div className="portal-card" key={event.id}>
+                <EventCard event={event} />
+                <button
+                  onClick={async () => {
+                    await removeFavoriteEvent(token, event.slug);
+                    setRefreshKey((value) => value + 1);
+                  }}
+                >
+                  <Trash2 size={17} /> Remove favorite
+                </button>
+              </div>
+            ))}
             {!data.favorites.length ? <div className="portal-card">No saved events yet.</div> : null}
           </div>
         ) : null}
@@ -1471,13 +1567,22 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
           <div className="portal-card portal-table">
             {data.upcoming.map((event) => (
               <div className="portal-row" key={event.id}>
-                <strong>{event.title}</strong>
-                <span>{new Date(event.startsAt).toLocaleString()}</span>
-                <a href={data.calendar[event.slug]?.google} target="_blank">Google</a>
-                <a href={data.calendar[event.slug]?.outlook} target="_blank">Outlook</a>
-                <a href={data.calendar[event.slug]?.apple}>Apple ICS</a>
-              </div>
-            ))}
+                  <strong>{event.title}</strong>
+                  <span>{new Date(event.startsAt).toLocaleString()}</span>
+                  <a href={data.calendar[event.slug]?.google} target="_blank">Google</a>
+                  <a href={data.calendar[event.slug]?.outlook} target="_blank">Outlook</a>
+                  <a href={data.calendar[event.slug]?.apple}>Apple ICS</a>
+                  <button
+                    onClick={async () => {
+                      setTicketText(await downloadTicket(token, event.slug));
+                      setTab("Tickets");
+                    }}
+                  >
+                    <Download size={16} />
+                  </button>
+                </div>
+              ))}
+              {!data.upcoming.length ? <span>No upcoming registrations yet.</span> : null}
           </div>
         ) : null}
         {tab === "Past" || tab === "History" ? (
@@ -1505,7 +1610,10 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
                 <input
                   type="checkbox"
                   checked={data.user.notifications[key]}
-                  onChange={(event) => updateNotifications(token, { ...data.user.notifications, [key]: event.target.checked })}
+                  onChange={async (event) => {
+                    await updateNotifications(token, { ...data.user.notifications, [key]: event.target.checked });
+                    setRefreshKey((value) => value + 1);
+                  }}
                 />
                 {key === "smsReady" ? "SMS-ready architecture" : key}
               </label>
@@ -1526,7 +1634,12 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
           <div className="portal-card">
             <button
               disabled={!firstEvent}
-              onClick={() => firstEvent && leaveReview(token, firstEvent.slug, { rating: 5, comment: "Great event experience." })}
+              onClick={async () => {
+                if (firstEvent) {
+                  await leaveReview(token, firstEvent.slug, { rating: 5, comment: "Great event experience." });
+                  setRefreshKey((value) => value + 1);
+                }
+              }}
             >
               <Sparkles size={17} /> Leave review
             </button>
@@ -1541,6 +1654,22 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
             </div>
           </div>
         ) : null}
+        {tab === "Profile" ? (
+          <form
+            className="portal-card form-grid"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              await updateParticipantProfile(token, profile);
+              setRefreshKey((value) => value + 1);
+            }}
+          >
+            <input value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} placeholder="Name" />
+            <input value={profile.email} onChange={(event) => setProfile({ ...profile, email: event.target.value })} placeholder="Email" />
+            <button className="solid-dark" type="submit">
+              <Settings size={18} /> Save profile
+            </button>
+          </form>
+        ) : null}
       </section>
     </main>
   );
@@ -1549,12 +1678,12 @@ function ParticipantDashboardContent({ token, user, logout }: { token: string; u
 function AdminDashboardPage() {
   return (
     <AuthGate allowed={["admin"]}>
-      {(auth) => <AdminDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+      {(auth) => <AdminDashboardContent token={auth.token} user={auth.user!} setAuth={auth.setAuth} logout={auth.logout} />}
     </AuthGate>
   );
 }
 
-function AdminDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+function AdminDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
   const { data, error, loading } = useAsync<AdminDashboard>(() => getAdminDashboard(token), [token]);
 
   useEffect(() => {
@@ -1566,7 +1695,7 @@ function AdminDashboardContent({ token, user, logout }: { token: string; user: U
   if (error || !data) return <ErrorState message={error ?? "Admin unavailable"} />;
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Admin Portal" role={user.role} logout={logout} />
+      <DashboardNav title="Admin Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
       <section className="dashboard-main admin-main">
         <div className="dashboard-heading">
           <span>Platform management</span>

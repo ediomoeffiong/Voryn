@@ -113,6 +113,7 @@ export type User = {
   name: string;
   email: string;
   role: Exclude<Role, "guest">;
+  lastDashboard: "participant" | "organizer" | "admin";
   organizerSlug?: string;
   favorites: string[];
   following: string[];

@@ -60,6 +60,7 @@ model User {
   email         String   @unique
   password      String
   role          String
+  lastDashboard String   @default("participant")
   organizerSlug String?
   favorites     String[]
   following     String[]

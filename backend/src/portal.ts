@@ -13,6 +13,7 @@ type User = {
   email: string;
   password: string;
   role: Exclude<Role, "guest">;
+  lastDashboard: "participant" | "organizer" | "admin";
   organizerSlug?: string;
   favorites: string[];
   following: string[];
@@ -70,6 +71,7 @@ export const users: User[] = [
     email: "participant@voryn.test",
     password: "password",
     role: "participant",
+    lastDashboard: "participant",
     favorites: ["lagos-tech-meetup-2026"],
     following: ["startup-lagos"],
     notifications: { email: true, push: true, smsReady: false }
@@ -80,6 +82,7 @@ export const users: User[] = [
     email: "organizer@voryn.test",
     password: "password",
     role: "organizer",
+    lastDashboard: "organizer",
     organizerSlug: "startup-lagos",
     favorites: [],
     following: [],
@@ -91,6 +94,7 @@ export const users: User[] = [
     email: "admin@voryn.test",
     password: "password",
     role: "admin",
+    lastDashboard: "admin",
     favorites: [],
     following: [],
     notifications: { email: true, push: true, smsReady: true }
@@ -122,7 +126,10 @@ function requireRole(request: Request, response: Response, roles: Role[]) {
     response.status(401).json({ error: "Authentication required" });
     return undefined;
   }
-  if (!roles.includes(user.role) && user.role !== "admin") {
+  const isMemberPortal =
+    (roles.includes("participant") || roles.includes("organizer")) &&
+    (user.role === "participant" || user.role === "organizer");
+  if (!roles.includes(user.role) && user.role !== "admin" && !isMemberPortal) {
     response.status(403).json({ error: "Role not allowed" });
     return undefined;
   }
@@ -131,6 +138,22 @@ function requireRole(request: Request, response: Response, roles: Role[]) {
 
 function organizerFor(user: User) {
   if (user.role === "admin") return organizers[0];
+  if (!user.organizerSlug) {
+    const slug = uniqueSlug(user.name, new Set(organizers.map((organizer) => organizer.slug)));
+    organizers.push({
+      id: `org_${slug}`,
+      name: user.name,
+      slug,
+      profileImage: "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=700&q=80",
+      coverImage: "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=1800&q=80",
+      bio: "Organizer on Voryn.",
+      website: "https://voryn.example",
+      socials: {},
+      followers: 0,
+      totalAttendeesHosted: 0
+    });
+    user.organizerSlug = slug;
+  }
   return organizers.find((organizer) => organizer.slug === user.organizerSlug) ?? organizers[0];
 }
 
@@ -295,7 +318,8 @@ function adminModel() {
 
 export function registerPortalRoutes(app: import("express").Express) {
   app.post("/api/auth/signup", (request, response) => {
-    const role = request.body.role === "organizer" || request.body.role === "admin" ? request.body.role : "participant";
+    if (request.body.role === "admin") return response.status(401).json({ error: "Invalid email or password" });
+    const role = request.body.role === "organizer" ? "organizer" : "participant";
     const email = String(request.body.email ?? "").trim().toLowerCase();
     const name = String(request.body.name ?? "").trim();
     const password = String(request.body.password ?? "");
@@ -325,6 +349,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       email,
       password,
       role,
+      lastDashboard: role,
       organizerSlug,
       favorites: [],
       following: [],
@@ -351,6 +376,35 @@ export function registerPortalRoutes(app: import("express").Express) {
     const email = String(request.body.email ?? "").trim().toLowerCase();
     const password = String(request.body.password ?? "");
     const user = users.find((item) => item.email === email && item.password === password);
+    if (!user || user.role === "admin") return response.status(401).json({ error: "Invalid email or password" });
+    response.json({ token: createToken(user.id), user: safeUser(user) });
+  });
+
+  app.post("/api/admin/auth/signup", (request, response) => {
+    const email = String(request.body.email ?? "").trim().toLowerCase();
+    const name = String(request.body.name ?? "").trim();
+    const password = String(request.body.password ?? "");
+    if (!email || !name || password.length < 4) return response.status(400).json({ error: "Name, email, and password are required" });
+    if (users.some((user) => user.email === email)) return response.status(409).json({ error: "Email already exists" });
+    const user: User = {
+      id: `user_admin_${Date.now()}`,
+      name,
+      email,
+      password,
+      role: "admin",
+      lastDashboard: "admin",
+      favorites: [],
+      following: [],
+      notifications: { email: true, push: true, smsReady: true }
+    };
+    users.push(user);
+    response.json({ token: createToken(user.id), user: safeUser(user) });
+  });
+
+  app.post("/api/admin/auth/login", (request, response) => {
+    const email = String(request.body.email ?? "").trim().toLowerCase();
+    const password = String(request.body.password ?? "");
+    const user = users.find((item) => item.email === email && item.password === password && item.role === "admin");
     if (!user) return response.status(401).json({ error: "Invalid email or password" });
     response.json({ token: createToken(user.id), user: safeUser(user) });
   });
@@ -358,6 +412,16 @@ export function registerPortalRoutes(app: import("express").Express) {
   app.get("/api/auth/me", (request, response) => {
     const user = currentUser(request);
     response.json({ user: user ? safeUser(user) : null });
+  });
+
+  app.post("/api/auth/switch-dashboard", (request, response) => {
+    const user = requireRole(request, response, ["participant", "organizer", "admin"]);
+    if (!user) return;
+    const dashboard = request.body.dashboard === "organizer" ? "organizer" : request.body.dashboard === "admin" ? "admin" : "participant";
+    if (dashboard === "admin" && user.role !== "admin") return response.status(403).json({ error: "Admin access required" });
+    if (dashboard === "organizer") organizerFor(user);
+    user.lastDashboard = dashboard;
+    response.json({ user: safeUser(user) });
   });
 
   app.get("/api/portal/participant", (request, response) => {
@@ -449,6 +513,18 @@ export function registerPortalRoutes(app: import("express").Express) {
     response.json(participantModel(user, request));
   });
 
+  app.post("/api/portal/participant/follow/:slug", (request, response) => {
+    const user = requireRole(request, response, ["participant"]);
+    if (!user) return;
+    const organizer = organizers.find((item) => item.slug === request.params.slug);
+    if (!organizer) return response.status(404).json({ error: "Organizer not found" });
+    if (!user.following.includes(organizer.slug)) {
+      user.following.push(organizer.slug);
+      organizer.followers += 1;
+    }
+    response.json(participantModel(user, request));
+  });
+
   app.put("/api/portal/participant/notifications", (request, response) => {
     const user = requireRole(request, response, ["participant"]);
     if (!user) return;
@@ -464,9 +540,28 @@ export function registerPortalRoutes(app: import("express").Express) {
     response.json(participantModel(user, request));
   });
 
+  app.put("/api/portal/participant/profile", (request, response) => {
+    const user = requireRole(request, response, ["participant"]);
+    if (!user) return;
+    user.name = String(request.body.name ?? user.name);
+    user.email = String(request.body.email ?? user.email).trim().toLowerCase();
+    response.json(participantModel(user, request));
+  });
+
   app.get("/api/portal/organizer", (request, response) => {
     const user = requireRole(request, response, ["organizer"]);
     if (!user) return;
+    response.json(organizerModel(user));
+  });
+
+  app.put("/api/portal/organizer/profile", (request, response) => {
+    const user = requireRole(request, response, ["organizer"]);
+    if (!user) return;
+    user.name = String(request.body.name ?? user.name);
+    const organizer = organizerFor(user);
+    organizer.name = String(request.body.organizerName ?? organizer.name);
+    organizer.bio = String(request.body.bio ?? organizer.bio);
+    organizer.website = String(request.body.website ?? organizer.website);
     response.json(organizerModel(user));
   });
 

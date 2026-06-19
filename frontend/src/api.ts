@@ -118,8 +118,30 @@ export function login(input: { email: string; password: string }) {
   });
 }
 
+export function adminSignup(input: { name: string; email: string; password: string }) {
+  return request<{ token: string; user: User }>("/api/admin/auth/signup", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
+export function adminLogin(input: { email: string; password: string }) {
+  return request<{ token: string; user: User }>("/api/admin/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input)
+  });
+}
+
 export function getMe(token: string) {
   return request<{ user: User | null }>("/api/auth/me", { token });
+}
+
+export function switchDashboard(token: string, dashboard: User["lastDashboard"]) {
+  return request<{ user: User }>("/api/auth/switch-dashboard", {
+    method: "POST",
+    token,
+    body: JSON.stringify({ dashboard })
+  });
 }
 
 export function getParticipantDashboard(token: string) {
@@ -128,6 +150,10 @@ export function getParticipantDashboard(token: string) {
 
 export function favoriteEvent(token: string, slug: string) {
   return request<ParticipantDashboard>(`/api/portal/participant/favorites/${slug}`, { method: "POST", token });
+}
+
+export function removeFavoriteEvent(token: string, slug: string) {
+  return request<ParticipantDashboard>(`/api/portal/participant/favorites/${slug}`, { method: "DELETE", token });
 }
 
 export function registerForEvent(token: string, slug: string) {
@@ -143,6 +169,21 @@ export function updateNotifications(token: string, notifications: User["notifica
     method: "PUT",
     token,
     body: JSON.stringify(notifications)
+  });
+}
+
+export function updateParticipantProfile(token: string, input: { name: string; email: string }) {
+  return request<ParticipantDashboard>("/api/portal/participant/profile", {
+    method: "PUT",
+    token,
+    body: JSON.stringify(input)
+  });
+}
+
+export function followOrganizerFromDashboard(token: string, slug: string) {
+  return request<ParticipantDashboard>(`/api/portal/participant/follow/${slug}`, {
+    method: "POST",
+    token
   });
 }
 
@@ -184,6 +225,14 @@ export function deleteOrganizerEvent(token: string, slug: string) {
 export function sendAnnouncement(token: string, input: { eventSlug: string; subject: string; message: string }) {
   return request<{ dashboard: OrganizerDashboard }>("/api/portal/organizer/announcements", {
     method: "POST",
+    token,
+    body: JSON.stringify(input)
+  });
+}
+
+export function updateOrganizerProfile(token: string, input: { name: string; organizerName: string; bio: string; website: string }) {
+  return request<OrganizerDashboard>("/api/portal/organizer/profile", {
+    method: "PUT",
     token,
     body: JSON.stringify(input)
   });
