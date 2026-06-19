@@ -44,6 +44,7 @@ model Event {
   startsAt         String
   venue            String
   citySlug         String
+  country          String
   organizerSlug    String
   media            Json
   attendeeCount    Int

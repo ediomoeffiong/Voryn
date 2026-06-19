@@ -516,6 +516,7 @@ export function registerPortalRoutes(app: import("express").Express) {
         startsAt: event.startsAt,
         venue: event.venue,
         citySlug: event.citySlug,
+        country: event.country,
         organizerSlug: event.organizerSlug,
         media: event.media,
         attendeeCount: event.attendeeCount,
@@ -565,6 +566,7 @@ export function registerPortalRoutes(app: import("express").Express) {
         summary: event.summary,
         priceLabel: event.priceLabel,
         citySlug: event.citySlug,
+        country: event.country,
         media: event.media,
       }
     }).catch((err) => console.error("Failed to update event in DB:", err));
