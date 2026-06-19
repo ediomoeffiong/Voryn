@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   BadgeCheck,
@@ -47,6 +47,7 @@ import {
   getCity,
   getEvent,
   getHome,
+  getMe,
   getOrganizer,
   getOrganizerDashboard,
   getParticipantDashboard,
@@ -60,7 +61,7 @@ import {
   updateNotifications,
   updateOrganizerEvent
 } from "./api";
-import {
+import type {
   AdminDashboard,
   CityDiscoveryModel,
   DiscoveryMode,
@@ -141,6 +142,9 @@ function useBrowserCoordinates() {
   return coordinates;
 }
 
+let globalInitialized = false;
+let globalInitializingPromise: Promise<{ user: User | null }> | null = null;
+
 function useAuthSession() {
   const [token, setToken] = useState(() => localStorage.getItem("voryn:token") ?? "");
   const [user, setUser] = useState<User | null>(() => {
@@ -150,12 +154,64 @@ function useAuthSession() {
       return null;
     }
   });
+  const [initialized, setInitialized] = useState(globalInitialized);
+
+  useEffect(() => {
+    const handler = () => {
+      setToken(localStorage.getItem("voryn:token") ?? "");
+      try {
+        setUser(JSON.parse(localStorage.getItem("voryn:user") ?? "null") as User | null);
+      } catch {
+        setUser(null);
+      }
+    };
+    window.addEventListener("voryn:auth", handler);
+    return () => window.removeEventListener("voryn:auth", handler);
+  }, []);
+
+  useEffect(() => {
+    if (globalInitialized) {
+      setInitialized(true);
+      return;
+    }
+
+    const storedToken = localStorage.getItem("voryn:token");
+    if (storedToken) {
+      if (!globalInitializingPromise) {
+        globalInitializingPromise = getMe(storedToken)
+          .then((res: { user: User | null }) => {
+            if (!res.user) {
+              localStorage.removeItem("voryn:token");
+              localStorage.removeItem("voryn:user");
+              window.dispatchEvent(new Event("voryn:auth"));
+            }
+            return res;
+          })
+          .catch(() => {
+            localStorage.removeItem("voryn:token");
+            localStorage.removeItem("voryn:user");
+            window.dispatchEvent(new Event("voryn:auth"));
+            return { user: null };
+          })
+          .finally(() => {
+            globalInitialized = true;
+          });
+      }
+      globalInitializingPromise.finally(() => {
+        setInitialized(true);
+      });
+    } else {
+      globalInitialized = true;
+      setInitialized(true);
+    }
+  }, []);
 
   const setAuth = (nextToken: string, nextUser: User) => {
     localStorage.setItem("voryn:token", nextToken);
     localStorage.setItem("voryn:user", JSON.stringify(nextUser));
     setToken(nextToken);
     setUser(nextUser);
+    window.dispatchEvent(new Event("voryn:auth"));
   };
 
   const logout = () => {
@@ -163,9 +219,10 @@ function useAuthSession() {
     localStorage.removeItem("voryn:user");
     setToken("");
     setUser(null);
+    window.dispatchEvent(new Event("voryn:auth"));
   };
 
-  return { token, user, setAuth, logout };
+  return { token, user, setAuth, logout, initialized };
 }
 
 function money(value: number) {
@@ -173,6 +230,10 @@ function money(value: number) {
 }
 
 function BrandNav({ navigation = defaultNavigation }: { navigation?: NavigationItem[] }) {
+  const auth = useAuthSession();
+  const isLoggedIn = Boolean(auth.user && auth.token);
+  const destination = auth.user?.role === "organizer" ? "/organizer" : auth.user?.role === "admin" ? "/admin" : "/participant";
+
   return (
     <header className="nav-shell">
       <Link to="/" className="brand-mark" aria-label="Voryn home">
@@ -190,9 +251,9 @@ function BrandNav({ navigation = defaultNavigation }: { navigation?: NavigationI
         <Link to="/search" className="icon-button" aria-label="Open search">
           <Search size={18} />
         </Link>
-        <Link to="/organizer" className="solid-button">
-          <Compass size={18} />
-          Host
+        <Link to={isLoggedIn ? destination : "/organizer"} className="solid-button">
+          {isLoggedIn ? <Compass size={18} /> : <Shield size={18} />}
+          {isLoggedIn ? "Dashboard" : "Sign In"}
         </Link>
       </div>
     </header>
@@ -1012,6 +1073,9 @@ function OrganizerPageContent({ data }: { data: { organizer: Organizer; upcoming
 
 function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: ReturnType<typeof useAuthSession>) => React.ReactNode }) {
   const auth = useAuthSession();
+  if (!auth.initialized) {
+    return <LoadingScreen />;
+  }
   if (!auth.user || !auth.token) {
     return <AuthPage defaultRole={allowed.includes("organizer") ? "organizer" : "participant"} />;
   }
@@ -1034,6 +1098,7 @@ function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: Ret
 
 function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role, "guest"> }) {
   const auth = useAuthSession();
+  const navigate = useNavigate();
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [role, setRole] = useState<Exclude<Role, "guest">>(defaultRole);
   const [name, setName] = useState("");
@@ -1050,6 +1115,8 @@ function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role,
           ? await login({ email, password })
           : await signup({ name: name || email.split("@")[0], email, password, role });
       auth.setAuth(result.token, result.user);
+      const dest = result.user.role === "organizer" ? "/organizer" : result.user.role === "admin" ? "/admin" : "/participant";
+      navigate(dest, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     }

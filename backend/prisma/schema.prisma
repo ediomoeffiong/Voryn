@@ -7,167 +7,94 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum EventStatus {
-  DRAFT
-  PUBLISHED
-  SOLD_OUT
-  CANCELLED
-  COMPLETED
-}
-
-enum DiscoveryMode {
-  LOCAL
-  ONLINE
-  GLOBAL
-}
-
-enum EventFormat {
-  IN_PERSON
-  VIRTUAL
-  HYBRID
-}
-
-enum EventBadgeKind {
-  FEATURED
-  TRENDING
-  RECOMMENDED
-  EDITORS_PICK
-  POPULAR
-  RECENTLY_ADDED
-}
-
 model City {
-  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
   name        String
-  slug        String   @unique
+  slug        String @unique
   country     String
   countryCode String
   region      String
   timezone    String
   heroImage   String
-  latitude    Float
-  longitude   Float
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  events Event[]
-
-  @@index([countryCode, slug])
-  @@index([region])
+  coordinates Json
 }
 
 model Organizer {
-  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
-  name                  String
-  slug                  String   @unique
-  profileImage          String
-  coverImage            String
-  bio                   String
-  website               String?
-  followersCount        Int      @default(0)
-  totalAttendeesHosted  Int      @default(0)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-
-  events     Event[]
-  followers  OrganizerFollow[]
-  socialLink OrganizerSocialLink[]
-
-  @@index([followersCount])
-}
-
-model OrganizerSocialLink {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  organizerId String    @db.ObjectId
-  platform    String
-  url         String
-  organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)
-
-  @@unique([organizerId, platform])
+  id                   String @id @default(auto()) @map("_id") @db.ObjectId
+  name                 String
+  slug                 String @unique
+  profileImage         String
+  coverImage           String
+  bio                  String
+  website              String
+  socials              Json
+  followers            Int
+  totalAttendeesHosted Int
 }
 
 model Event {
-  id               String        @id @default(auto()) @map("_id") @db.ObjectId
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
   title            String
-  slug             String        @unique
+  slug             String   @unique
   summary          String
   category         String
   type             String
-  mode             DiscoveryMode
-  format           EventFormat
-  status           EventStatus   @default(DRAFT)
-  startsAt         DateTime
-  endsAt           DateTime?
+  mode             String
+  status           String
+  startsAt         String
   venue            String
-  country          String
-  currency         String?
+  citySlug         String
+  organizerSlug    String
+  media            Json
+  attendeeCount    Int
+  rsvpCount        Int
+  ticketSalesCount Int
+  badges           String[]
   priceLabel       String
-  capacity         Int?
-  attendeeCount    Int           @default(0)
-  rsvpCount        Int           @default(0)
-  ticketSalesCount Int           @default(0)
-  publishedAt      DateTime?
-  cancelledAt      DateTime?
-  completedAt      DateTime?
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
-
-  cityId      String    @db.ObjectId
-  organizerId String    @db.ObjectId
-  city        City      @relation(fields: [cityId], references: [id])
-  organizer   Organizer @relation(fields: [organizerId], references: [id])
-  media       EventMedia?
-  badges      EventBadge[]
-
-  @@index([status, startsAt])
-  @@index([mode, status, startsAt])
-  @@index([cityId, status, startsAt])
-  @@index([organizerId, status, startsAt])
-  @@index([category, status, startsAt])
-}
-
-model EventMedia {
-  id              String  @id @default(auto()) @map("_id") @db.ObjectId
-  eventId          String  @unique @db.ObjectId
-  coverImage       String
-  heroImage        String
-  thumbnail        String
-  gallery          String[]
-  videoTrailer     String?
-  organizerMedia   String[]
-  event            Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
-}
-
-model EventBadge {
-  id        String         @id @default(auto()) @map("_id") @db.ObjectId
-  eventId   String         @db.ObjectId
-  kind      EventBadgeKind
-  startsAt  DateTime?
-  endsAt    DateTime?
-  createdAt DateTime       @default(now())
-  event     Event          @relation(fields: [eventId], references: [id], onDelete: Cascade)
-
-  @@unique([eventId, kind])
-  @@index([kind, startsAt, endsAt])
 }
 
 model User {
-  id        String   @id @default(auto()) @map("_id") @db.ObjectId
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-
-  follows OrganizerFollow[]
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  name          String
+  email         String   @unique
+  password      String
+  role          String
+  organizerSlug String?
+  favorites     String[]
+  following     String[]
+  notifications Json
 }
 
-model OrganizerFollow {
-  id          String    @id @default(auto()) @map("_id") @db.ObjectId
-  userId      String    @db.ObjectId
-  organizerId String    @db.ObjectId
-  createdAt   DateTime  @default(now())
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  organizer   Organizer @relation(fields: [organizerId], references: [id], onDelete: Cascade)
+model Registration {
+  id           String  @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String
+  eventSlug    String
+  registeredAt String
+  checkedIn    Boolean
+  ticketCode   String
+  reminders    Json
+}
 
-  @@unique([userId, organizerId])
-  @@index([organizerId, createdAt])
+model Announcement {
+  id            String @id @default(auto()) @map("_id") @db.ObjectId
+  organizerSlug String
+  eventSlug     String
+  subject       String
+  message       String
+  sentAt        String
+}
+
+model Review {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String
+  eventSlug String
+  rating    Int
+  comment   String
+  createdAt String
+}
+
+model Session {
+  id     String @id @default(auto()) @map("_id") @db.ObjectId
+  token  String @unique
+  userId String
 }

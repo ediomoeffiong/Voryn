@@ -1,6 +1,7 @@
 import cors from "cors";
 import express from "express";
 import { cities, organizers, publicEvents } from "./data.js";
+import { initDb, prisma } from "./db.js";
 import { getCityDiscoveryModel, getHomepageMetrics, getModeCollections } from "./discovery.js";
 import {
   getNavigation,
@@ -98,6 +99,15 @@ app.post("/api/events/:slug/rsvp", (request, response) => {
     event.ticketSalesCount += 1;
   }
 
+  prisma.event.update({
+    where: { slug: event.slug },
+    data: {
+      rsvpCount: event.rsvpCount,
+      attendeeCount: event.attendeeCount,
+      ticketSalesCount: event.ticketSalesCount
+    }
+  }).catch(err => console.error("Failed to update event RSVP in DB:", err));
+
   return response.json({
     event,
     action: event.status === "sold-out" ? "waitlist-joined" : "reserved"
@@ -135,6 +145,12 @@ app.post("/api/organizers/:slug/follow", (request, response) => {
   if (!organizer) return response.status(404).json({ error: "Organizer not found" });
 
   organizer.followers += 1;
+
+  prisma.organizer.update({
+    where: { slug: organizer.slug },
+    data: { followers: organizer.followers }
+  }).catch(err => console.error("Failed to update organizer followers in DB:", err));
+
   return response.json({ organizer, action: "followed" });
 });
 
@@ -165,6 +181,8 @@ app.use((_request, response) => {
   response.status(404).json({ error: "Route not found" });
 });
 
-app.listen(port, () => {
-  console.log(`Voryn API listening on http://localhost:${port}`);
+initDb().then(() => {
+  app.listen(port, () => {
+    console.log(`Voryn API listening on http://localhost:${port}`);
+  });
 });
