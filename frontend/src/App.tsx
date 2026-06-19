@@ -1,0 +1,1530 @@
+import { useEffect, useMemo, useState } from "react";
+import { Link, Route, Routes, useParams, useSearchParams } from "react-router-dom";
+import {
+  ArrowRight,
+  BadgeCheck,
+  BarChart3,
+  Bell,
+  Building2,
+  CalendarPlus,
+  CalendarClock,
+  CalendarDays,
+  CheckCircle2,
+  Compass,
+  Download,
+  DollarSign,
+  Edit3,
+  ExternalLink,
+  Flame,
+  Globe2,
+  Heart,
+  Link as LinkIcon,
+  LogOut,
+  Mail,
+  MapPin,
+  MapPinned,
+  MonitorPlay,
+  Plus,
+  Search,
+  Settings,
+  Share2,
+  Shield,
+  Sparkles,
+  Tags,
+  Ticket,
+  Trash2,
+  Users,
+  UsersRound
+} from "lucide-react";
+import {
+  createOrganizerEvent,
+  deleteOrganizerEvent,
+  downloadTicket,
+  exportAttendees,
+  favoriteEvent,
+  followOrganizer,
+  getAdminDashboard,
+  getCity,
+  getEvent,
+  getHome,
+  getOrganizer,
+  getOrganizerDashboard,
+  getParticipantDashboard,
+  leaveReview,
+  login,
+  registerForEvent,
+  reserveEvent,
+  searchEvents,
+  sendAnnouncement,
+  signup,
+  updateNotifications,
+  updateOrganizerEvent
+} from "./api";
+import {
+  AdminDashboard,
+  CityDiscoveryModel,
+  DiscoveryMode,
+  Event,
+  EventStatus,
+  HomePayload,
+  Interest,
+  NavigationItem,
+  Organizer,
+  OrganizerDashboard,
+  ParticipantDashboard,
+  Role,
+  User
+} from "./types";
+
+function useAsync<T>(load: () => Promise<T>, deps: unknown[]) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+    load()
+      .then((result) => {
+        if (active) setData(result);
+      })
+      .catch((err: unknown) => {
+        if (active) setError(err instanceof Error ? err.message : "Something went wrong");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, deps);
+
+  return { data, error, loading };
+}
+
+const defaultNavigation: NavigationItem[] = [
+  { label: "Near You", href: "/search?scope=near-you", kind: "nearby" },
+  { label: "Lagos Events", href: "/lagos", kind: "capital" },
+  { label: "Abuja Events", href: "/abuja", kind: "capital" },
+  { label: "Global Events", href: "/search?mode=global", kind: "global" }
+];
+
+function useStoredInterests() {
+  const [interests, setInterests] = useState<Interest[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("voryn:interests") ?? "[]") as Interest[];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem("voryn:interests", JSON.stringify(interests));
+  }, [interests]);
+
+  return [interests, setInterests] as const;
+}
+
+function useBrowserCoordinates() {
+  const [coordinates, setCoordinates] = useState<{ lat: number; lng: number } | undefined>();
+
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (position) => setCoordinates({ lat: position.coords.latitude, lng: position.coords.longitude }),
+      () => setCoordinates(undefined),
+      { enableHighAccuracy: false, maximumAge: 1000 * 60 * 30, timeout: 4500 }
+    );
+  }, []);
+
+  return coordinates;
+}
+
+function useAuthSession() {
+  const [token, setToken] = useState(() => localStorage.getItem("voryn:token") ?? "");
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("voryn:user") ?? "null") as User | null;
+    } catch {
+      return null;
+    }
+  });
+
+  const setAuth = (nextToken: string, nextUser: User) => {
+    localStorage.setItem("voryn:token", nextToken);
+    localStorage.setItem("voryn:user", JSON.stringify(nextUser));
+    setToken(nextToken);
+    setUser(nextUser);
+  };
+
+  const logout = () => {
+    localStorage.removeItem("voryn:token");
+    localStorage.removeItem("voryn:user");
+    setToken("");
+    setUser(null);
+  };
+
+  return { token, user, setAuth, logout };
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat("en", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
+}
+
+function BrandNav({ navigation = defaultNavigation }: { navigation?: NavigationItem[] }) {
+  return (
+    <header className="nav-shell">
+      <Link to="/" className="brand-mark" aria-label="Voryn home">
+        <span>V</span>
+        Voryn
+      </Link>
+      <nav className="nav-links" aria-label="Primary navigation">
+        {navigation.map((item) => (
+          <Link to={item.href} key={`${item.kind}-${item.label}`}>
+            {item.label}
+          </Link>
+        ))}
+      </nav>
+      <div className="nav-actions">
+        <Link to="/search" className="icon-button" aria-label="Open search">
+          <Search size={18} />
+        </Link>
+        <Link to="/organizer" className="solid-button">
+          <Compass size={18} />
+          Host
+        </Link>
+      </div>
+    </header>
+  );
+}
+
+const modes: { value: DiscoveryMode; label: string; icon: React.ElementType }[] = [
+  { value: "local", label: "Local", icon: MapPin },
+  { value: "online", label: "Online", icon: MonitorPlay },
+  { value: "global", label: "Global", icon: Globe2 }
+];
+
+function DiscoverySwitch({ active, onChange }: { active: DiscoveryMode; onChange: (mode: DiscoveryMode) => void }) {
+  return (
+    <div className="mode-switch" role="tablist" aria-label="Discovery mode">
+      {modes.map((mode) => {
+        const Icon = mode.icon;
+        return (
+          <button
+            key={mode.value}
+            className={active === mode.value ? "active" : ""}
+            onClick={() => onChange(mode.value)}
+            role="tab"
+            aria-selected={active === mode.value}
+          >
+            <Icon size={17} />
+            {mode.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const badgeLabel: Record<string, string> = {
+  featured: "Featured",
+  trending: "Trending",
+  recommended: "Recommended",
+  "editors-pick": "Editor's pick",
+  popular: "Popular",
+  "recently-added": "New"
+};
+
+function EventCard({ event, large = false }: { event: Event; large?: boolean }) {
+  const primaryBadge = event.badges[0];
+
+  return (
+    <Link to={`/events/${event.slug}`} className={large ? "event-card large" : "event-card"}>
+      <div className="event-image">
+        <img src={event.media.coverImage} alt="" />
+        <div className="image-scrim" />
+        {primaryBadge ? (
+          <span className="momentum-badge">
+            <Flame size={14} />
+            {badgeLabel[primaryBadge]}
+          </span>
+        ) : null}
+        <span className={`status-pill ${event.status}`}>{event.status.replace("-", " ")}</span>
+      </div>
+      <div className="event-card-body">
+        <p className="eyebrow">{event.country}</p>
+        <h3>{event.title}</h3>
+        <p>{event.summary}</p>
+        <div className="metric-row">
+          <span>
+            <Users size={15} />
+            {event.attendeeCount.toLocaleString()} attending
+          </span>
+          <span>
+            <CalendarDays size={15} />
+            {new Intl.DateTimeFormat("en", { month: "short", day: "numeric" }).format(new Date(event.startsAt))}
+          </span>
+        </div>
+        <div className="organizer-line">
+          <span>{event.category}</span>
+          <strong>{event.priceLabel}</strong>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+function SearchExperience({
+  interests = [],
+  countryCode,
+  initialMode = "local"
+}: {
+  interests?: Interest[];
+  countryCode?: string;
+  initialMode?: DiscoveryMode;
+}) {
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<DiscoveryMode>(initialMode);
+  const [results, setResults] = useState<Event[]>([]);
+
+  useEffect(() => {
+    setMode(initialMode);
+  }, [initialMode]);
+
+  useEffect(() => {
+    let active = true;
+    searchEvents(query, mode, { countryCode, interests }).then((payload) => {
+      if (active) setResults(payload.results);
+    });
+    return () => {
+      active = false;
+    };
+  }, [query, mode, countryCode, interests.join(",")]);
+
+  const suggestions = useMemo(() => {
+    if (!query) return ["Lagos startups", "AI summit", "Online workshops", "Canada career"];
+    return ["Nigeria", "United States", "United Kingdom", "Canada", "Technology", "Global"].filter((item) =>
+      item.toLowerCase().includes(query.toLowerCase())
+    );
+  }, [query]);
+
+  return (
+    <section className="search-stage" aria-label="Event search">
+      <div className="search-panel">
+        <DiscoverySwitch active={mode} onChange={setMode} />
+        <div className="search-box">
+          <Search size={22} />
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Search events, organizers, cities, countries, categories..."
+            aria-label="Search events"
+          />
+        </div>
+        <div className="suggestion-row" aria-label="Instant suggestions">
+          {suggestions.map((suggestion) => (
+            <button key={suggestion} onClick={() => setQuery(suggestion)}>
+              <Sparkles size={14} />
+              {suggestion}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="live-results">
+        {results.length > 0 ? (
+          results.slice(0, 4).map((event) => (
+            <Link to={`/events/${event.slug}`} className="result-strip" key={event.id}>
+              <span className="result-thumb" style={{ backgroundImage: `url(${event.media.thumbnail})` }} />
+              <span>
+                <strong>{event.title}</strong>
+                <small>
+                  {event.category} / {event.type} / {event.country}
+                </small>
+              </span>
+              <ArrowRight size={17} />
+            </Link>
+          ))
+        ) : (
+          <div className="context-empty">
+            <MapPin size={22} />
+            <strong>No nearby matches yet.</strong>
+            <span>Explore online events happening around the world or broaden the city.</span>
+            <button onClick={() => setMode("online")}>Explore online</button>
+          </div>
+        )}
+      </div>
+      <div className="search-proof">
+        <span>
+          <Building2 size={16} /> Backend search API
+        </span>
+        <span>
+          <Sparkles size={16} /> Title, organizer, city, country, category, and type
+        </span>
+      </div>
+    </section>
+  );
+}
+
+function InterestPreferences({
+  available,
+  selected,
+  onChange
+}: {
+  available: Interest[];
+  selected: Interest[];
+  onChange: (interests: Interest[]) => void;
+}) {
+  const toggle = (interest: Interest) => {
+    onChange(selected.includes(interest) ? selected.filter((item) => item !== interest) : [...selected, interest]);
+  };
+
+  return (
+    <section className="section-wrap preference-section">
+      <div className="section-heading split">
+        <div>
+          <span>
+            <Sparkles size={17} /> Preferences
+          </span>
+          <h2>Choose interests and Voryn reshapes the feed around you.</h2>
+        </div>
+        {selected.length ? (
+          <button className="clear-preferences" onClick={() => onChange([])}>
+            Clear
+          </button>
+        ) : null}
+      </div>
+      <div className="interest-grid" aria-label="Interest preferences">
+        {available.map((interest) => {
+          const active = selected.includes(interest);
+          return (
+            <button className={active ? "active" : ""} key={interest} onClick={() => toggle(interest)}>
+              {active ? <CheckCircle2 size={16} /> : <Tags size={16} />}
+              {interest}
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function OrganizerStrip({ organizers }: { organizers: Organizer[] }) {
+  return (
+    <div className="organizer-grid">
+      {organizers.map((organizer) => (
+        <Link to={`/organizers/${organizer.slug}`} className="organizer-card" key={organizer.id}>
+          <img src={organizer.coverImage} alt="" />
+          <div className="organizer-card-content">
+            <img src={organizer.profileImage} alt="" width={64} height={64} />
+            <span>
+              <strong>{organizer.name}</strong>
+              <small>
+                <UsersRound size={14} />
+                {organizer.followers.toLocaleString()} followers
+              </small>
+            </span>
+          </div>
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <main>
+      <BrandNav />
+      <section className="search-page-hero">
+        <div>
+          <p className="eyebrow">Loading</p>
+          <h1>Gathering the room.</h1>
+          <p>Voryn is pulling live discovery data from the backend.</p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function ErrorState({ message }: { message: string }) {
+  return (
+    <main>
+      <BrandNav />
+      <section className="search-page-hero">
+        <div className="context-empty">
+          <strong>The backend did not answer.</strong>
+          <span>{message}. Start the API with npm run dev --workspace backend.</span>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function Home() {
+  const [interests, setInterests] = useStoredInterests();
+  const coordinates = useBrowserCoordinates();
+  const { data, error, loading } = useAsync<HomePayload>(
+    () => getHome({ coordinates, interests }),
+    [coordinates?.lat, coordinates?.lng, interests.join(",")]
+  );
+
+  useEffect(() => {
+    document.title = "Voryn | Discover events with momentum";
+  }, []);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "No homepage data"} />;
+
+  return (
+    <main>
+      <BrandNav navigation={data.navigation} />
+      <section className="home-hero">
+        <img src={data.heroEvent.media.heroImage} alt="" />
+        <div className="hero-overlay" />
+        <div className="hero-content">
+          <div className="hero-copy">
+            <p className="eyebrow">
+              {data.location.source === "default" ? "Nigeria by default" : `${data.location.country} events`}
+            </p>
+            <h1>Find the rooms where momentum is already happening.</h1>
+            <p>
+              Voryn turns event discovery into a visual feed of active communities, creator-led organizers,
+              and travel-worthy experiences.
+            </p>
+            <Link to={`/events/${data.heroEvent.slug}`} className="hero-link">
+              Explore featured event <ArrowRight size={18} />
+            </Link>
+          </div>
+          <SearchExperience interests={interests} countryCode={data.location.countryCode} />
+        </div>
+      </section>
+
+      <section className="section-wrap event-menu-section">
+        <div className="section-heading">
+          <span>
+            <MapPinned size={17} /> Event navigation
+          </span>
+          <h2>{data.location.source === "default" ? "Starting with Nigerian events for every new visitor." : `Discovery tuned for ${data.location.country}.`}</h2>
+        </div>
+        <div className="event-menu-grid">
+          {data.navigation.map((item) => (
+            <Link to={item.href} className="event-menu-card" key={`${item.kind}-${item.label}`}>
+              <strong>{item.label}</strong>
+              <span>
+                {item.kind === "nearby"
+                  ? "Nearby cities and regions first"
+                  : item.kind === "global"
+                    ? "International and virtual events"
+                    : "Capital city discovery"}
+              </span>
+              <ArrowRight size={18} />
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <InterestPreferences available={data.interests} selected={interests} onChange={setInterests} />
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>
+            <Sparkles size={17} /> Recommended For You
+          </span>
+          <h2>{interests.length ? "Ranked by your interests, location, and event momentum." : "Pick interests to sharpen these recommendations."}</h2>
+        </div>
+        <div className="event-grid">
+          {data.recommended.slice(0, 3).map((event, index) => (
+            <EventCard event={event} large={index === 0} key={event.id} />
+          ))}
+        </div>
+      </section>
+
+      <section className="section-wrap city-rail-section">
+        <div className="section-heading">
+          <span>
+            <Globe2 size={17} /> City architecture
+          </span>
+          <h2>Built for thousands of local discovery pages.</h2>
+        </div>
+        <div className="city-rail">
+          {data.cities.map((city) => (
+            <Link to={`/${city.slug}`} className="city-tile" key={city.id}>
+              <img src={city.heroImage} alt="" />
+              <span>{city.name}</span>
+              <small>{city.country}</small>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading split">
+          <div>
+            <span>
+              <MapPin size={17} /> Near You
+            </span>
+            <h2>Nearby cities and regions appear first.</h2>
+          </div>
+          <Link to={data.navigation[0]?.href ?? "/search"}>
+            Explore near you <ArrowRight size={17} />
+          </Link>
+        </div>
+        <div className="event-grid">
+          {(data.nearby.length ? data.nearby : data.countryEvents).slice(0, 3).map((event, index) => (
+            <EventCard event={event} large={index === 0} key={event.id} />
+          ))}
+        </div>
+      </section>
+
+      <section className="section-wrap momentum-band">
+        <div className="section-heading">
+          <span>
+            <MapPin size={17} /> Social proof
+          </span>
+          <h2>Discovery shaped by activity, demand, and trust.</h2>
+        </div>
+        <div className="metric-cards">
+          <div>
+            <strong>{(data.metrics.attendees / 1000).toFixed(1)}K</strong>
+            <span>attendees visible across public events</span>
+          </div>
+          <div>
+            <strong>{(data.metrics.rsvps / 1000).toFixed(1)}K</strong>
+            <span>RSVPs powering trending signals</span>
+          </div>
+          <div>
+            <strong>{(data.metrics.tickets / 1000).toFixed(1)}K</strong>
+            <span>tickets sold across featured inventory</span>
+          </div>
+        </div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>Global events</span>
+          <h2>Major international and virtual events remain within reach.</h2>
+        </div>
+        <div className="event-grid compact">
+          {data.global.slice(0, 4).map((event) => (
+            <EventCard event={event} key={event.id} />
+          ))}
+        </div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading split">
+          <div>
+            <span>Creator profiles</span>
+            <h2>Organizers feel like people and media brands.</h2>
+          </div>
+        </div>
+        <OrganizerStrip organizers={data.organizers} />
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>Trending now</span>
+          <h2>Fast routes into what people are already joining.</h2>
+        </div>
+        <div className="event-grid compact">
+          {data.trending.map((event) => (
+            <EventCard event={event} key={event.id} />
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function SearchPage() {
+  const [params] = useSearchParams();
+  const [interests] = useStoredInterests();
+  const coordinates = useBrowserCoordinates();
+  const initialMode = params.get("mode") === "global" ? "global" : params.get("mode") === "online" ? "online" : "local";
+  const { data, error, loading } = useAsync<HomePayload>(
+    () => getHome({ coordinates, interests }),
+    [coordinates?.lat, coordinates?.lng, interests.join(",")]
+  );
+
+  useEffect(() => {
+    document.title = "Search events | Voryn";
+  }, []);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "No search data"} />;
+
+  return (
+    <main>
+      <BrandNav navigation={data.navigation} />
+      <section className="search-page-hero">
+        <div>
+          <p className="eyebrow">Search</p>
+          <h1>Find the next room before everyone else does.</h1>
+          <p>Search across cities, countries, organizers, categories, online events, and travel-worthy global experiences.</p>
+        </div>
+        <SearchExperience interests={interests} countryCode={data.location.countryCode} initialMode={initialMode} />
+      </section>
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>Recommended</span>
+          <h2>High-momentum events to start from.</h2>
+        </div>
+        <div className="event-grid">
+          {data.recommended.slice(0, 3).map((event, index) => (
+            <EventCard event={event} large={index === 0} key={event.id} />
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function CityPage() {
+  const { city = "" } = useParams();
+  const { data, error, loading } = useAsync<CityDiscoveryModel>(() => getCity(city), [city]);
+
+  useEffect(() => {
+    if (data) document.title = `${data.city.name} events | Voryn`;
+  }, [data]);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "City not found"} />;
+
+  const visibleEvents = data.upcomingEvents.length ? data.upcomingEvents : data.fallbackEvents;
+  const categories = data.categories.length ? data.categories : [...new Set(visibleEvents.map((event) => event.category))];
+
+  return (
+    <main>
+      <BrandNav />
+      <section className="city-hero">
+        <img src={data.city.heroImage} alt="" />
+        <div className="hero-overlay" />
+        <div className="city-hero-content">
+          <p className="eyebrow">
+            {data.city.region} / {data.city.country}
+          </p>
+          <h1>{data.city.name}</h1>
+          <p>Featured gatherings, local momentum, standout organizers, and online escapes when the city is quiet.</p>
+        </div>
+      </section>
+
+      <section className="section-wrap city-dashboard">
+        <div className="city-stat">
+          <Flame size={19} />
+          <strong>{data.trendingEvents.length}</strong>
+          <span>Trending</span>
+        </div>
+        <div className="city-stat">
+          <CalendarClock size={19} />
+          <strong>{visibleEvents.length}</strong>
+          <span>Upcoming</span>
+        </div>
+        <div className="city-stat">
+          <Tags size={19} />
+          <strong>{categories.length}</strong>
+          <span>Categories</span>
+        </div>
+        <div className="city-stat">
+          <MapPinned size={19} />
+          <strong>{data.city.timezone}</strong>
+          <span>Timezone</span>
+        </div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>Featured events</span>
+          <h2>{data.upcomingEvents.length ? `The sharpest rooms in ${data.city.name}.` : "No local events yet. Explore online events around the world."}</h2>
+        </div>
+        <div className="event-grid">
+          {visibleEvents.map((event, index) => (
+            <EventCard event={event} large={index === 0} key={event.id} />
+          ))}
+        </div>
+      </section>
+
+      <section className="section-wrap category-band">
+        <div className="section-heading">
+          <span>Categories</span>
+          <h2>Move by intent, not by database rows.</h2>
+        </div>
+        <div className="category-pills">{categories.map((category) => <span key={category}>{category}</span>)}</div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>Local organizers</span>
+          <h2>Follow the creators shaping this city.</h2>
+        </div>
+        {data.localOrganizers.length ? (
+          <OrganizerStrip organizers={data.localOrganizers} />
+        ) : (
+          <div className="context-empty city-empty">
+            <strong>No local organizer has claimed this city yet.</strong>
+            <span>Voryn can still route visitors into online events while the local graph grows.</span>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function EventPage() {
+  const { slug = "" } = useParams();
+  const { data, error, loading } = useAsync(() => getEvent(slug), [slug]);
+
+  useEffect(() => {
+    if (data) document.title = `${data.event.title} | Voryn`;
+  }, [data]);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "Event not found"} />;
+
+  const { event, related } = data;
+  const [liveEvent, setLiveEvent] = useState(event);
+  const [ticketAction, setTicketAction] = useState<string | null>(null);
+  const auth = useAuthSession();
+  const shownEvent = liveEvent.slug === event.slug ? liveEvent : event;
+  const isCancelled = event.status === "cancelled";
+  const isSoldOut = event.status === "sold-out";
+  const calendarStart = new Date(shownEvent.startsAt);
+  const calendarEnd = new Date(calendarStart.getTime() + 2 * 60 * 60 * 1000);
+  const calendarStamp = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const googleCalendar = `https://calendar.google.com/calendar/render?${new URLSearchParams({
+    action: "TEMPLATE",
+    text: shownEvent.title,
+    details: shownEvent.summary,
+    location: shownEvent.venue,
+    dates: `${calendarStamp(calendarStart)}/${calendarStamp(calendarEnd)}`
+  }).toString()}`;
+  const outlookCalendar = `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&${new URLSearchParams({
+    subject: shownEvent.title,
+    body: shownEvent.summary,
+    location: shownEvent.venue,
+    startdt: calendarStart.toISOString(),
+    enddt: calendarEnd.toISOString()
+  }).toString()}`;
+
+  return (
+    <main>
+      <BrandNav />
+      <script type="application/ld+json">{JSON.stringify(data.jsonLd)}</script>
+      <section className="event-hero">
+        <img src={shownEvent.media.heroImage} alt="" />
+        <div className="hero-overlay" />
+        <div className="event-hero-content">
+          <div>
+            <p className="eyebrow">
+              {shownEvent.category} / {shownEvent.type} / {shownEvent.mode}
+            </p>
+            <h1>{shownEvent.title}</h1>
+            <p>{shownEvent.summary}</p>
+          </div>
+          <aside className="ticket-panel">
+            <span className={`status-pill ${shownEvent.status}`}>{shownEvent.status.replace("-", " ")}</span>
+            <strong>{shownEvent.priceLabel}</strong>
+            <button
+              disabled={isCancelled}
+              onClick={async () => {
+                if (auth.user?.role === "participant" && auth.token) {
+                  await registerForEvent(auth.token, shownEvent.slug);
+                  setTicketAction("Registered with reminders");
+                } else {
+                  const result = await reserveEvent(shownEvent.slug);
+                  setLiveEvent(result.event);
+                  setTicketAction(result.action === "waitlist-joined" ? "Waitlist joined" : "Spot reserved");
+                }
+              }}
+            >
+              <Ticket size={18} />
+              {isCancelled ? "Cancelled" : auth.user?.role === "participant" ? "Register" : isSoldOut ? "Join waitlist" : "Reserve spot"}
+            </button>
+            {auth.user?.role === "participant" && auth.token ? (
+              <button onClick={() => favoriteEvent(auth.token, shownEvent.slug)}>
+                <Heart size={18} /> Save event
+              </button>
+            ) : (
+              <Link to="/login">
+                <Shield size={18} /> Log in for tickets
+              </Link>
+            )}
+            <div className="calendar-actions">
+              <a href={googleCalendar} target="_blank">
+                <CalendarPlus size={16} /> Google
+              </a>
+              <a href={outlookCalendar} target="_blank">
+                Outlook
+              </a>
+              <a href={`/api/calendar/${shownEvent.slug}.ics`}>Apple ICS</a>
+            </div>
+            <small>
+              {shownEvent.rsvpCount.toLocaleString()} RSVPs / {shownEvent.ticketSalesCount.toLocaleString()} tickets sold
+            </small>
+            {ticketAction ? <small>{ticketAction}</small> : null}
+          </aside>
+        </div>
+      </section>
+
+      {isCancelled ? (
+        <section className="notice-band">
+          <CheckCircle2 size={20} />
+          <strong>This event has been cancelled.</strong>
+          <span>Voryn keeps cancelled events visible so attendees can see updates and organizer history.</span>
+        </section>
+      ) : null}
+
+      <section className="section-wrap event-detail-grid">
+        <div className="event-story">
+          <img src={shownEvent.media.coverImage} alt="" />
+          <h2>Why this room matters</h2>
+          <p>
+            {shownEvent.summary} Expect curated sessions, visible community momentum, and a setting designed for people who want more than a calendar listing.
+          </p>
+          <div className="media-slots">
+            <div>Gallery ready</div>
+            <div>Video trailer ready</div>
+            <div>Organizer media ready</div>
+          </div>
+        </div>
+        <aside className="event-facts">
+          <span>
+            <CalendarDays size={17} />
+            {new Intl.DateTimeFormat("en", { dateStyle: "full", timeStyle: "short" }).format(new Date(shownEvent.startsAt))}
+          </span>
+          <span>
+            <Users size={17} />
+            {shownEvent.attendeeCount.toLocaleString()} attending
+          </span>
+          <span>
+            <LinkIcon size={17} />
+            {shownEvent.country}
+          </span>
+          <span>
+            <Share2 size={17} />
+            {shownEvent.venue}
+          </span>
+        </aside>
+      </section>
+
+      {related.length ? (
+        <section className="section-wrap">
+          <div className="section-heading">
+            <span>More like this</span>
+            <h2>Keep following the signal.</h2>
+          </div>
+          <div className="event-grid compact">{related.map((item) => <EventCard event={item} key={item.id} />)}</div>
+        </section>
+      ) : null}
+    </main>
+  );
+}
+
+function OrganizerPage() {
+  const { slug = "" } = useParams();
+  const { data, error, loading } = useAsync(() => getOrganizer(slug), [slug]);
+
+  useEffect(() => {
+    if (data) document.title = `${data.organizer.name} events | Voryn`;
+  }, [data]);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "Organizer not found"} />;
+
+  const { organizer, upcoming, past } = data;
+  const [liveOrganizer, setLiveOrganizer] = useState(organizer);
+  const shownOrganizer = liveOrganizer.slug === organizer.slug ? liveOrganizer : organizer;
+
+  return (
+    <main>
+      <BrandNav />
+      <section className="organizer-hero">
+        <img src={shownOrganizer.coverImage} alt="" />
+        <div className="hero-overlay" />
+        <div className="organizer-profile">
+          <img src={shownOrganizer.profileImage} alt="" width={116} height={116} />
+          <div>
+            <p className="eyebrow">Organizer profile</p>
+            <h1>{shownOrganizer.name}</h1>
+            <p>{shownOrganizer.bio}</p>
+            <div className="organizer-actions">
+              <button
+                onClick={async () => {
+                  const result = await followOrganizer(shownOrganizer.slug);
+                  setLiveOrganizer(result.organizer);
+                }}
+              >
+                <Heart size={18} /> Follow
+              </button>
+              <button>
+                <Bell size={18} /> Updates
+              </button>
+              <a href={shownOrganizer.website}>
+                <ExternalLink size={18} /> Website
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="section-wrap organizer-stats">
+        <div>
+          <strong>{shownOrganizer.followers.toLocaleString()}</strong>
+          <span>Followers</span>
+        </div>
+        <div>
+          <strong>{shownOrganizer.totalAttendeesHosted.toLocaleString()}</strong>
+          <span>Total attendees hosted</span>
+        </div>
+        <div>
+          <strong>{upcoming.length}</strong>
+          <span>Upcoming events</span>
+        </div>
+        <div>
+          <strong>{past.length}</strong>
+          <span>Past events</span>
+        </div>
+      </section>
+
+      <section className="section-wrap">
+        <div className="section-heading">
+          <span>
+            <UsersRound size={17} /> Upcoming
+          </span>
+          <h2>Follow the next rooms from {shownOrganizer.name}.</h2>
+        </div>
+        <div className="event-grid">
+          {upcoming.map((event, index) => (
+            <EventCard event={event} large={index === 0} key={event.id} />
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: ReturnType<typeof useAuthSession>) => React.ReactNode }) {
+  const auth = useAuthSession();
+  if (!auth.user || !auth.token) {
+    return <AuthPage defaultRole={allowed.includes("organizer") ? "organizer" : "participant"} />;
+  }
+  if (!allowed.includes(auth.user.role)) {
+    return (
+      <main>
+        <BrandNav />
+        <section className="portal-hero">
+          <p className="eyebrow">Role access</p>
+          <h1>This dashboard is for {allowed.join(" or ")} accounts.</h1>
+          <button className="solid-dark" onClick={auth.logout}>
+            <LogOut size={18} /> Switch account
+          </button>
+        </section>
+      </main>
+    );
+  }
+  return <>{children(auth)}</>;
+}
+
+function AuthPage({ defaultRole = "participant" }: { defaultRole?: Exclude<Role, "guest"> }) {
+  const auth = useAuthSession();
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [role, setRole] = useState<Exclude<Role, "guest">>(defaultRole);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState(defaultRole === "organizer" ? "organizer@voryn.test" : "participant@voryn.test");
+  const [password, setPassword] = useState("password");
+  const [error, setError] = useState("");
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError("");
+    try {
+      const result =
+        mode === "login"
+          ? await login({ email, password })
+          : await signup({ name: name || email.split("@")[0], email, password, role });
+      auth.setAuth(result.token, result.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Authentication failed");
+    }
+  };
+
+  const destination = auth.user?.role === "organizer" ? "/organizer" : auth.user?.role === "admin" ? "/admin" : "/participant";
+
+  return (
+    <main>
+      <BrandNav />
+      <section className="portal-hero auth-hero">
+        <div>
+          <p className="eyebrow">Authentication</p>
+          <h1>Sign in to the right side of Voryn.</h1>
+          <p>Guests can browse and search. Participants register and manage tickets. Organizers manage events. Admins manage the platform.</p>
+          {auth.user ? (
+            <Link className="hero-link" to={destination}>
+              Continue to dashboard <ArrowRight size={18} />
+            </Link>
+          ) : null}
+        </div>
+        <form className="portal-card auth-card" onSubmit={submit}>
+          <div className="mode-switch">
+            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
+              Log in
+            </button>
+            <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>
+              Sign up
+            </button>
+          </div>
+          {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /> : null}
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
+          {mode === "signup" ? (
+            <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)}>
+              <option value="participant">Participant</option>
+              <option value="organizer">Organizer</option>
+              <option value="admin">Admin</option>
+            </select>
+          ) : null}
+          {error ? <small className="form-error">{error}</small> : null}
+          <button className="solid-dark" type="submit">
+            <Shield size={18} /> {mode === "login" ? "Log in" : "Create account"}
+          </button>
+          <small>Demo logins: participant@voryn.test, organizer@voryn.test, admin@voryn.test. Password: password.</small>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+function DashboardNav({ title, role, logout }: { title: string; role: string; logout: () => void }) {
+  return (
+    <header className="dashboard-topbar">
+      <Link to="/" className="brand-mark">
+        <span>V</span>
+        Voryn
+      </Link>
+      <strong>{title}</strong>
+      <div className="dashboard-role">
+        <span>{role}</span>
+        <button onClick={logout}>
+          <LogOut size={17} /> Log out
+        </button>
+      </div>
+    </header>
+  );
+}
+
+function MetricPanel({ icon: Icon, label, value }: { icon: React.ElementType; label: string; value: string | number }) {
+  return (
+    <div className="portal-metric">
+      <Icon size={20} />
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function OrganizerDashboardPage() {
+  return (
+    <AuthGate allowed={["organizer", "admin"]}>
+      {(auth) => <OrganizerDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+    </AuthGate>
+  );
+}
+
+function OrganizerDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+  const [tab, setTab] = useState("Overview");
+  const [draft, setDraft] = useState({
+    title: "New Voryn Event",
+    citySlug: "lagos",
+    category: "Technology" as Interest,
+    status: "draft" as EventStatus,
+    startsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
+    venue: "TBA",
+    priceLabel: "Free",
+    summary: "A new event for the Voryn community."
+  });
+  const { data, error, loading } = useAsync<OrganizerDashboard>(() => getOrganizerDashboard(token), [token, tab]);
+  const tabs = ["Overview", "My Events", "Create Event", "Analytics", "Attendees", "Revenue", "Settings"];
+
+  const reloadWith = (dashboard: OrganizerDashboard) => {
+    window.dispatchEvent(new CustomEvent("voryn:dashboard", { detail: dashboard }));
+  };
+
+  useEffect(() => {
+    const handler = () => setTab((current) => current);
+    window.addEventListener("voryn:dashboard", handler);
+    return () => window.removeEventListener("voryn:dashboard", handler);
+  }, []);
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
+
+  const createEvent = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const result = await createOrganizerEvent(token, draft);
+    reloadWith(result.dashboard);
+    setTab("My Events");
+  };
+
+  const announce = async () => {
+    const first = data.events[0];
+    if (!first) return;
+    const result = await sendAnnouncement(token, {
+      eventSlug: first.slug,
+      subject: "Event update",
+      message: "A new update has been sent to registered attendees."
+    });
+    reloadWith(result.dashboard);
+  };
+
+  const exportCsv = async () => {
+    const csv = await exportAttendees(token);
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "voryn-attendees.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <main className="dashboard-shell">
+      <DashboardNav title="Organizer Portal" role={user.role} logout={logout} />
+      <aside className="dashboard-sidebar">
+        {tabs.map((item) => (
+          <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+            {item}
+          </button>
+        ))}
+      </aside>
+      <section className="dashboard-main">
+        <div className="dashboard-heading">
+          <span>{data.organizer.name}</span>
+          <h1>{tab}</h1>
+        </div>
+
+        {tab === "Overview" ? (
+          <div className="portal-grid four">
+            <MetricPanel icon={CalendarDays} label="Events" value={data.overview.events} />
+            <MetricPanel icon={Users} label="Attendees" value={data.overview.attendees.toLocaleString()} />
+            <MetricPanel icon={Ticket} label="Registrations" value={data.overview.registrations} />
+            <MetricPanel icon={DollarSign} label="Revenue" value={money(data.overview.revenue)} />
+          </div>
+        ) : null}
+
+        {tab === "My Events" ? (
+          <div className="portal-card">
+            <div className="table-actions">
+              <button onClick={announce}>
+                <Mail size={17} /> Send announcement
+              </button>
+              <button onClick={exportCsv}>
+                <Download size={17} /> Export attendees
+              </button>
+            </div>
+            <div className="portal-table">
+              {data.events.map((event) => (
+                <div className="portal-row" key={event.id}>
+                  <strong>{event.title}</strong>
+                  <span>{event.category}</span>
+                  <span>{event.status}</span>
+                  <span>{event.attendeeCount.toLocaleString()} attendees</span>
+                  <button
+                    onClick={async () => {
+                      await updateOrganizerEvent(token, event.slug, { status: event.status === "published" ? "sold-out" : "published" });
+                      setTab("Analytics");
+                    }}
+                  >
+                    <Edit3 size={16} />
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await deleteOrganizerEvent(token, event.slug);
+                      setTab("Overview");
+                    }}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {tab === "Create Event" ? (
+          <form className="portal-card form-grid" onSubmit={createEvent}>
+            <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Title" />
+            <select value={draft.citySlug} onChange={(event) => setDraft({ ...draft, citySlug: event.target.value })}>
+              <option value="lagos">Lagos</option>
+              <option value="abuja">Abuja</option>
+              <option value="washington-dc">Washington D.C.</option>
+              <option value="london">London</option>
+              <option value="ottawa">Ottawa</option>
+            </select>
+            <select value={draft.category} onChange={(event) => setDraft({ ...draft, category: event.target.value as Interest })}>
+              {["Technology", "Business", "Startups", "Music", "Entertainment", "Sports", "Networking", "Education", "Career", "Finance", "Fashion", "Health", "Gaming", "Arts", "Religion", "Community Events"].map((interest) => (
+                <option key={interest}>{interest}</option>
+              ))}
+            </select>
+            <select value={draft.status} onChange={(event) => setDraft({ ...draft, status: event.target.value as EventStatus })}>
+              <option value="draft">Draft</option>
+              <option value="published">Published</option>
+              <option value="sold-out">Sold out</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <input value={draft.startsAt} onChange={(event) => setDraft({ ...draft, startsAt: event.target.value })} />
+            <input value={draft.venue} onChange={(event) => setDraft({ ...draft, venue: event.target.value })} placeholder="Venue" />
+            <input value={draft.priceLabel} onChange={(event) => setDraft({ ...draft, priceLabel: event.target.value })} placeholder="Price" />
+            <textarea value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} />
+            <button className="solid-dark" type="submit">
+              <Plus size={18} /> Create event
+            </button>
+          </form>
+        ) : null}
+
+        {tab === "Analytics" ? (
+          <div className="portal-card portal-table">
+            {data.analytics.map((item) => (
+              <div className="portal-row" key={item.eventSlug}>
+                <strong>{item.title}</strong>
+                <span>{item.rsvpCount.toLocaleString()} RSVPs</span>
+                <span>{item.ticketSalesCount.toLocaleString()} tickets</span>
+                <span>{money(item.revenue)}</span>
+                <span>{Math.round(item.conversionRate * 100)}% conversion</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tab === "Attendees" ? (
+          <div className="portal-card portal-table">
+            {data.attendees.length ? data.attendees.map((attendee) => (
+              <div className="portal-row" key={attendee.id}>
+                <strong>{attendee.user.name}</strong>
+                <span>{attendee.user.email}</span>
+                <span>{attendee.eventSlug}</span>
+                <span>{attendee.ticketCode}</span>
+              </div>
+            )) : <span>No registrations yet.</span>}
+          </div>
+        ) : null}
+
+        {tab === "Revenue" ? (
+          <div className="portal-grid">
+            <MetricPanel icon={DollarSign} label="Total revenue" value={money(data.revenue.total)} />
+            {data.revenue.byEvent.map((item) => (
+              <div className="portal-card" key={item.eventSlug}>
+                <strong>{item.title}</strong>
+                <span>{money(item.revenue)}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tab === "Settings" ? (
+          <div className="portal-card">
+            <Settings size={22} />
+            <h2>Organizer settings</h2>
+            <p>Profile, organizer brand, payout, reminder, and SMS-provider settings are ready to connect to persistent storage.</p>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function ParticipantDashboardPage() {
+  return (
+    <AuthGate allowed={["participant", "admin"]}>
+      {(auth) => <ParticipantDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+    </AuthGate>
+  );
+}
+
+function ParticipantDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+  const [tab, setTab] = useState("Overview");
+  const [ticketText, setTicketText] = useState("");
+  const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, tab]);
+  const tabs = ["Overview", "Favorites", "Upcoming", "Past", "History", "Tickets", "Notifications", "Reviews"];
+
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
+
+  const firstEvent = data.upcoming[0] ?? data.history[0];
+
+  return (
+    <main className="dashboard-shell">
+      <DashboardNav title="Participant Portal" role={user.role} logout={logout} />
+      <aside className="dashboard-sidebar">
+        {tabs.map((item) => (
+          <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+            {item}
+          </button>
+        ))}
+      </aside>
+      <section className="dashboard-main">
+        <div className="dashboard-heading">
+          <span>{data.user.name}</span>
+          <h1>{tab}</h1>
+        </div>
+        {tab === "Overview" ? (
+          <div className="portal-grid four">
+            <MetricPanel icon={Heart} label="Favorites" value={data.favorites.length} />
+            <MetricPanel icon={Ticket} label="Registrations" value={data.registrations.length} />
+            <MetricPanel icon={CalendarClock} label="Upcoming" value={data.upcoming.length} />
+            <MetricPanel icon={Bell} label="Reminders" value={data.reminders.length} />
+          </div>
+        ) : null}
+        {tab === "Favorites" ? (
+          <div className="event-grid compact">
+            {data.favorites.map((event) => <EventCard event={event} key={event.id} />)}
+            {!data.favorites.length ? <div className="portal-card">No saved events yet.</div> : null}
+          </div>
+        ) : null}
+        {tab === "Upcoming" ? (
+          <div className="portal-card portal-table">
+            {data.upcoming.map((event) => (
+              <div className="portal-row" key={event.id}>
+                <strong>{event.title}</strong>
+                <span>{new Date(event.startsAt).toLocaleString()}</span>
+                <a href={data.calendar[event.slug]?.google} target="_blank">Google</a>
+                <a href={data.calendar[event.slug]?.outlook} target="_blank">Outlook</a>
+                <a href={data.calendar[event.slug]?.apple}>Apple ICS</a>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {tab === "Past" || tab === "History" ? (
+          <div className="event-grid compact">
+            {(tab === "Past" ? data.past : data.history).map((event) => <EventCard event={event} key={event.id} />)}
+          </div>
+        ) : null}
+        {tab === "Tickets" ? (
+          <div className="portal-card">
+            <button
+              disabled={!firstEvent}
+              onClick={async () => {
+                if (firstEvent) setTicketText(await downloadTicket(token, firstEvent.slug));
+              }}
+            >
+              <Download size={17} /> Download latest ticket
+            </button>
+            <pre>{ticketText || "Register for an event to generate a downloadable ticket."}</pre>
+          </div>
+        ) : null}
+        {tab === "Notifications" ? (
+          <div className="portal-card settings-list">
+            {(["email", "push", "smsReady"] as const).map((key) => (
+              <label key={key}>
+                <input
+                  type="checkbox"
+                  checked={data.user.notifications[key]}
+                  onChange={(event) => updateNotifications(token, { ...data.user.notifications, [key]: event.target.checked })}
+                />
+                {key === "smsReady" ? "SMS-ready architecture" : key}
+              </label>
+            ))}
+            <div className="portal-table">
+              {data.reminders.slice(0, 8).map((reminder, index) => (
+                <div className="portal-row" key={`${reminder.channel}-${reminder.scheduledAt}-${index}`}>
+                  <strong>{reminder.offset}</strong>
+                  <span>{reminder.channel}</span>
+                  <span>{new Date(reminder.scheduledAt).toLocaleString()}</span>
+                  <span>{reminder.status}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+        {tab === "Reviews" ? (
+          <div className="portal-card">
+            <button
+              disabled={!firstEvent}
+              onClick={() => firstEvent && leaveReview(token, firstEvent.slug, { rating: 5, comment: "Great event experience." })}
+            >
+              <Sparkles size={17} /> Leave review
+            </button>
+            <div className="portal-table">
+              {data.reviews.map((review) => (
+                <div className="portal-row" key={review.id}>
+                  <strong>{review.eventSlug}</strong>
+                  <span>{review.rating}/5</span>
+                  <span>{review.comment}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+function AdminDashboardPage() {
+  return (
+    <AuthGate allowed={["admin"]}>
+      {(auth) => <AdminDashboardContent token={auth.token} user={auth.user!} logout={auth.logout} />}
+    </AuthGate>
+  );
+}
+
+function AdminDashboardContent({ token, user, logout }: { token: string; user: User; logout: () => void }) {
+  const { data, error, loading } = useAsync<AdminDashboard>(() => getAdminDashboard(token), [token]);
+  if (loading) return <LoadingScreen />;
+  if (error || !data) return <ErrorState message={error ?? "Admin unavailable"} />;
+  return (
+    <main className="dashboard-shell">
+      <DashboardNav title="Admin Portal" role={user.role} logout={logout} />
+      <section className="dashboard-main admin-main">
+        <div className="dashboard-heading">
+          <span>Platform management</span>
+          <h1>Admin</h1>
+        </div>
+        <div className="portal-grid four">
+          <MetricPanel icon={Users} label="Users" value={data.analytics.users} />
+          <MetricPanel icon={UsersRound} label="Organizers" value={data.analytics.organizers} />
+          <MetricPanel icon={CalendarDays} label="Events" value={data.analytics.events} />
+          <MetricPanel icon={BarChart3} label="Revenue" value={money(data.analytics.revenue)} />
+        </div>
+        <div className="portal-card portal-table">
+          <h2>Moderation queue</h2>
+          {data.reports.length ? data.reports.map((report) => (
+            <div className="portal-row" key={report.id}>
+              <strong>{report.eventSlug}</strong>
+              <span>{report.rating}/5</span>
+              <span>{report.comment}</span>
+            </div>
+          )) : <span>No reports need review.</span>}
+        </div>
+        <div className="portal-card portal-table">
+          <h2>Users and organizers</h2>
+          {data.users.map((item) => (
+            <div className="portal-row" key={item.id}>
+              <strong>{item.name}</strong>
+              <span>{item.email}</span>
+              <span>{item.role}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Home />} />
+      <Route path="/search" element={<SearchPage />} />
+      <Route path="/login" element={<AuthPage />} />
+      <Route path="/signup" element={<AuthPage />} />
+      <Route path="/participant" element={<ParticipantDashboardPage />} />
+      <Route path="/organizer" element={<OrganizerDashboardPage />} />
+      <Route path="/admin" element={<AdminDashboardPage />} />
+      <Route path="/events/:slug" element={<EventPage />} />
+      <Route path="/organizers/:slug" element={<OrganizerPage />} />
+      <Route path="/:city" element={<CityPage />} />
+    </Routes>
+  );
+}
+
+export default App;
