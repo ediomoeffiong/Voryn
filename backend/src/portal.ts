@@ -219,6 +219,7 @@ function organizerFor(user: User) {
       totalAttendeesHosted: 0
     });
     user.organizerSlug = slug;
+    persistPortalState();
   }
   return organizers.find((organizer) => organizer.slug === user.organizerSlug) ?? organizers[0];
 }
@@ -406,6 +407,7 @@ export function registerPortalRoutes(app: import("express").Express) {
         totalAttendeesHosted: 0
       };
       organizers.push(org as any);
+      persistPortalState();
       prisma.organizer.create({ data: org }).catch((err) => console.error("Failed to save organizer:", err));
     }
 
@@ -422,12 +424,14 @@ export function registerPortalRoutes(app: import("express").Express) {
       notifications: { email: true, push: true, smsReady: false }
     };
     users.push(user);
+    persistPortalState();
     prisma.user.create({
       data: {
         name: user.name,
         email: user.email,
         password: user.password,
         role: user.role,
+        lastDashboard: user.lastDashboard,
         organizerSlug: user.organizerSlug,
         favorites: user.favorites,
         following: user.following,
@@ -464,6 +468,20 @@ export function registerPortalRoutes(app: import("express").Express) {
       notifications: { email: true, push: true, smsReady: true }
     };
     users.push(user);
+    persistPortalState();
+    prisma.user.create({
+      data: {
+        name: user.name,
+        email: user.email,
+        password: user.password,
+        role: user.role,
+        lastDashboard: user.lastDashboard,
+        organizerSlug: user.organizerSlug,
+        favorites: user.favorites,
+        following: user.following,
+        notifications: user.notifications
+      }
+    }).catch((err) => console.error("Failed to save admin user:", err));
     response.json({ token: createToken(user.id), user: safeUser(user) });
   });
 
@@ -487,6 +505,11 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (dashboard === "admin" && user.role !== "admin") return response.status(403).json({ error: "Admin access required" });
     if (dashboard === "organizer") organizerFor(user);
     user.lastDashboard = dashboard;
+    persistPortalState();
+    prisma.user.update({
+      where: { email: user.email },
+      data: { lastDashboard: user.lastDashboard, organizerSlug: user.organizerSlug }
+    }).catch((err) => console.error("Failed to update dashboard preference:", err));
     response.json({ user: safeUser(user) });
   });
 
@@ -501,6 +524,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (!user) return;
     if (!user.favorites.includes(request.params.slug)) {
       user.favorites.push(request.params.slug);
+      persistPortalState();
       prisma.user.update({
         where: { email: user.email },
         data: { favorites: user.favorites }
@@ -513,6 +537,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     const user = requireRole(request, response, ["participant"]);
     if (!user) return;
     user.favorites = user.favorites.filter((slug) => slug !== request.params.slug);
+    persistPortalState();
     prisma.user.update({
       where: { email: user.email },
       data: { favorites: user.favorites }
@@ -541,6 +566,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       event.attendeeCount += 1;
       if (event.status !== "sold-out") event.ticketSalesCount += 1;
 
+      persistPortalState();
       prisma.registration.create({ data: registration }).catch((err) => console.error("Failed to save registration:", err));
       prisma.event.update({
         where: { slug: event.slug },
@@ -575,6 +601,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       createdAt: new Date().toISOString()
     };
     reviews.push(review);
+    persistPortalState();
     prisma.review.create({ data: review }).catch((err) => console.error("Failed to save review:", err));
     response.json(participantModel(user, request));
   });
@@ -587,6 +614,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (!user.following.includes(organizer.slug)) {
       user.following.push(organizer.slug);
       organizer.followers += 1;
+      persistPortalState();
     }
     response.json(participantModel(user, request));
   });
@@ -599,6 +627,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       push: Boolean(request.body.push),
       smsReady: Boolean(request.body.smsReady)
     };
+    persistPortalState();
     prisma.user.update({
       where: { email: user.email },
       data: { notifications: user.notifications }
@@ -611,6 +640,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (!user) return;
     user.name = String(request.body.name ?? user.name);
     user.email = String(request.body.email ?? user.email).trim().toLowerCase();
+    persistPortalState();
     response.json(participantModel(user, request));
   });
 
@@ -628,6 +658,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     organizer.name = String(request.body.organizerName ?? organizer.name);
     organizer.bio = String(request.body.bio ?? organizer.bio);
     organizer.website = String(request.body.website ?? organizer.website);
+    persistPortalState();
     response.json(organizerModel(user));
   });
 
@@ -665,6 +696,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       priceLabel: String(request.body.priceLabel ?? "Free")
     };
     publicEvents.push(event);
+    persistPortalState();
     prisma.event.create({
       data: {
         title: event.title,
@@ -715,6 +747,7 @@ export function registerPortalRoutes(app: import("express").Express) {
         thumbnail: request.body.thumbnail ?? event.media.thumbnail
       }
     });
+    persistPortalState();
 
     prisma.event.update({
       where: { slug: event.slug },
@@ -742,6 +775,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (index === -1) return response.status(404).json({ error: "Event not found" });
     if (user.role !== "admin" && publicEvents[index].organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
     const [event] = publicEvents.splice(index, 1);
+    persistPortalState();
 
     prisma.event.delete({
       where: { slug: event.slug }
@@ -763,6 +797,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       sentAt: new Date().toISOString()
     };
     announcements.push(announcement);
+    persistPortalState();
     prisma.announcement.create({ data: announcement }).catch((err) => console.error("Failed to save announcement:", err));
     response.json({ announcement, dashboard: organizerModel(user) });
   });

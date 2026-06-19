@@ -239,7 +239,7 @@ function money(value: number) {
 function BrandNav({ navigation = defaultNavigation }: { navigation?: NavigationItem[] }) {
   const auth = useAuthSession();
   const isLoggedIn = Boolean(auth.user && auth.token);
-  const destination = auth.user?.role === "organizer" ? "/organizer" : auth.user?.role === "admin" ? "/admin" : "/participant";
+  const destination = auth.user ? dashboardPath(auth.user) : "/attendee";
 
   return (
     <header className="nav-shell">
@@ -856,6 +856,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
   const [liveEvent, setLiveEvent] = useState(event);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const auth = useAuthSession();
+  const canUseAttendeeActions = Boolean(auth.user && auth.token && auth.user.role !== "admin");
   const shownEvent = liveEvent.slug === event.slug ? liveEvent : event;
   const isCancelled = event.status === "cancelled";
   const isSoldOut = event.status === "sold-out";
@@ -898,8 +899,10 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             <button
               disabled={isCancelled}
               onClick={async () => {
-                if (auth.user?.role === "participant" && auth.token) {
-                  await registerForEvent(auth.token, shownEvent.slug);
+                if (canUseAttendeeActions && auth.token) {
+                  const result = await registerForEvent(auth.token, shownEvent.slug);
+                  const updated = result.dashboard.history.find((item) => item.slug === shownEvent.slug);
+                  if (updated) setLiveEvent(updated);
                   setTicketAction("Registered with reminders");
                 } else {
                   const result = await reserveEvent(shownEvent.slug);
@@ -909,10 +912,15 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               }}
             >
               <Ticket size={18} />
-              {isCancelled ? "Cancelled" : auth.user?.role === "participant" ? "Register" : isSoldOut ? "Join waitlist" : "Reserve spot"}
+              {isCancelled ? "Cancelled" : canUseAttendeeActions ? "Register" : isSoldOut ? "Join waitlist" : "Reserve spot"}
             </button>
-            {auth.user?.role === "participant" && auth.token ? (
-              <button onClick={() => favoriteEvent(auth.token, shownEvent.slug)}>
+            {canUseAttendeeActions && auth.token ? (
+              <button
+                onClick={async () => {
+                  await favoriteEvent(auth.token, shownEvent.slug);
+                  setTicketAction("Event saved");
+                }}
+              >
                 <Heart size={18} /> Save event
               </button>
             ) : (
@@ -1107,7 +1115,7 @@ function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: Ret
 }
 
 function dashboardPath(user: User) {
-  return user.lastDashboard === "organizer" ? "/organizer" : user.lastDashboard === "admin" ? "/admin" : "/participant";
+  return user.lastDashboard === "organizer" ? "/organizer" : user.lastDashboard === "admin" ? "/admin" : "/attendee";
 }
 
 function AuthPage({
@@ -1145,7 +1153,7 @@ function AuthPage({
     }
   };
 
-  const destination = auth.user ? dashboardPath(auth.user) : "/participant";
+  const destination = auth.user ? dashboardPath(auth.user) : "/attendee";
 
   return (
     <main>
@@ -1154,7 +1162,7 @@ function AuthPage({
         <div>
           <p className="eyebrow">{adminOnly ? "Admin access" : "Authentication"}</p>
           <h1>{adminOnly ? "Admin sign in lives here." : "Sign in to the right side of Voryn."}</h1>
-          <p>{adminOnly ? "Admin registration and login are separated from normal user signup." : "Guests can browse and search. Participants register and manage tickets. Organizers manage events."}</p>
+          <p>{adminOnly ? "Admin registration and login are separated from normal user signup." : "Guests can browse and search. Attendees register and manage tickets. Organizers manage events."}</p>
           {auth.user ? (
             <Link className="hero-link" to={destination}>
               Continue to dashboard <ArrowRight size={18} />
@@ -1175,7 +1183,7 @@ function AuthPage({
           <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
           {mode === "signup" && !adminOnly ? (
             <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)}>
-              <option value="participant">Participant</option>
+              <option value="participant">Attendee</option>
               <option value="organizer">Organizer</option>
             </select>
           ) : null}
@@ -1183,7 +1191,7 @@ function AuthPage({
           <button className="solid-dark" type="submit">
             <Shield size={18} /> {mode === "login" ? "Log in" : "Create account"}
           </button>
-          <small>{adminOnly ? "Admin login: admin@voryn.test / password." : "User logins: participant@voryn.test or organizer@voryn.test / password."}</small>
+          <small>{adminOnly ? "Admin login: admin@voryn.test / password." : "User logins: attendee demo participant@voryn.test or organizer@voryn.test / password."}</small>
         </form>
       </section>
     </main>
@@ -1204,12 +1212,6 @@ function DashboardNav({
   logout: () => void;
 }) {
   const navigate = useNavigate();
-  const switchTo = async (dashboard: User["lastDashboard"]) => {
-    const result = await switchDashboard(token, dashboard);
-    setAuth(token, result.user);
-    navigate(dashboardPath(result.user));
-  };
-
   return (
     <header className="dashboard-topbar">
       <Link to="/" className="brand-mark">
@@ -1218,18 +1220,48 @@ function DashboardNav({
       </Link>
       <strong>{title}</strong>
       <div className="dashboard-role">
-        <span>{role}</span>
-        {role !== "admin" ? (
-          <>
-            <button onClick={() => switchTo("participant")}>Participant</button>
-            <button onClick={() => switchTo("organizer")}>Organizer</button>
-          </>
-        ) : null}
+        <span>{role === "participant" ? "attendee" : role}</span>
         <button onClick={logout}>
           <LogOut size={17} /> Log out
         </button>
       </div>
     </header>
+  );
+}
+
+function FloatingDashboardSwitch({
+  active,
+  token,
+  setAuth
+}: {
+  active: "participant" | "organizer";
+  token: string;
+  setAuth: (token: string, user: User) => void;
+}) {
+  const navigate = useNavigate();
+  const switchTo = async (dashboard: "participant" | "organizer") => {
+    const result = await switchDashboard(token, dashboard);
+    setAuth(token, result.user);
+    navigate(dashboardPath(result.user));
+  };
+
+  return (
+    <div className="floating-dashboard-switch" aria-label="Switch dashboard">
+      <button className={active === "participant" ? "active" : ""} onClick={() => switchTo("participant")}>
+        <Users size={18} />
+        <span>
+          <strong>Attendee</strong>
+          <small>Tickets and saves</small>
+        </span>
+      </button>
+      <button className={active === "organizer" ? "active" : ""} onClick={() => switchTo("organizer")}>
+        <Compass size={18} />
+        <span>
+          <strong>Organizer</strong>
+          <small>Create events</small>
+        </span>
+      </button>
+    </div>
   );
 }
 
@@ -1320,6 +1352,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
   return (
     <main className="dashboard-shell">
       <DashboardNav title="Organizer Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      {user.role !== "admin" ? <FloatingDashboardSwitch active="organizer" token={token} setAuth={setAuth} /> : null}
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
           <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
@@ -1524,7 +1557,8 @@ function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: 
 
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Participant Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      <DashboardNav title="Attendee Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      {user.role !== "admin" ? <FloatingDashboardSwitch active="participant" token={token} setAuth={setAuth} /> : null}
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
           <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
@@ -1739,6 +1773,7 @@ function App() {
       <Route path="/search" element={<SearchPage />} />
       <Route path="/login" element={<AuthPage />} />
       <Route path="/signup" element={<AuthPage />} />
+      <Route path="/attendee" element={<ParticipantDashboardPage />} />
       <Route path="/participant" element={<ParticipantDashboardPage />} />
       <Route path="/organizer" element={<OrganizerDashboardPage />} />
       <Route path="/admin" element={<AdminDashboardPage />} />
