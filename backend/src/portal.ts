@@ -1,4 +1,6 @@
 import type { Request, Response } from "express";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { cities, organizers, publicEvents } from "./data.js";
 import { prisma } from "./db.js";
 import type { Event, EventStatus, Interest } from "./domain.js";
@@ -101,6 +103,69 @@ export const users: User[] = [
   }
 ];
 
+const storePath = join(process.cwd(), "portal-store.json");
+
+function persistPortalState() {
+  const payload = {
+    users,
+    registrations,
+    announcements,
+    reviews,
+    sessions: [...sessions.entries()],
+    organizers,
+    publicEvents
+  };
+  mkdirSync(dirname(storePath), { recursive: true });
+  writeFileSync(storePath, JSON.stringify(payload, null, 2));
+}
+
+function loadPortalState() {
+  if (!existsSync(storePath)) return;
+  try {
+    const payload = JSON.parse(readFileSync(storePath, "utf8")) as {
+      users?: User[];
+      registrations?: Registration[];
+      announcements?: Announcement[];
+      reviews?: Review[];
+      sessions?: [string, string][];
+      organizers?: typeof organizers;
+      publicEvents?: typeof publicEvents;
+    };
+    if (payload.users?.length) {
+      users.length = 0;
+      users.push(...payload.users);
+    }
+    if (payload.registrations) {
+      registrations.length = 0;
+      registrations.push(...payload.registrations);
+    }
+    if (payload.announcements) {
+      announcements.length = 0;
+      announcements.push(...payload.announcements);
+    }
+    if (payload.reviews) {
+      reviews.length = 0;
+      reviews.push(...payload.reviews);
+    }
+    if (payload.sessions) {
+      sessions.clear();
+      for (const [token, userId] of payload.sessions) sessions.set(token, userId);
+    }
+    if (payload.organizers?.length) {
+      organizers.length = 0;
+      organizers.push(...payload.organizers);
+    }
+    if (payload.publicEvents?.length) {
+      publicEvents.length = 0;
+      publicEvents.push(...payload.publicEvents);
+    }
+  } catch (error) {
+    console.error("Failed to load portal store:", error);
+  }
+}
+
+loadPortalState();
+
 function safeUser(user: User) {
   const { password: _password, ...safe } = user;
   return safe;
@@ -109,6 +174,7 @@ function safeUser(user: User) {
 function createToken(userId: string) {
   const token = `tok_${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   sessions.set(token, userId);
+  persistPortalState();
   prisma.session.create({ data: { token, userId } }).catch((err) => console.error("Failed to save session:", err));
   return token;
 }
