@@ -19,16 +19,26 @@ import { searchEvents } from "./search.js";
 
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
+const corsOrigin = process.env.CORS_ORIGIN ?? "*";
 
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN ?? true,
+  origin: corsOrigin,
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204
 };
 
+app.use((request, response, next) => {
+  response.setHeader("Access-Control-Allow-Origin", corsOrigin);
+  response.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  if (request.method === "OPTIONS") {
+    return response.sendStatus(204);
+  }
+  next();
+});
+
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 app.use(express.json());
 registerPortalRoutes(app);
 
