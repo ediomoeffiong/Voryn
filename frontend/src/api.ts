@@ -16,7 +16,8 @@ import {
   User
 } from "./types";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "" : "https://voryn-backend.onrender.com");
+const rawApiBase = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "" : "https://voryn-backend.onrender.com");
+const API_BASE = rawApiBase.replace(/\/+$/, "");
 
 type RequestOptions = RequestInit & { token?: string | null };
 
