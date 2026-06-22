@@ -25,9 +25,27 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (options.token) headers.set("Authorization", `Bearer ${options.token}`);
+
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+    let errorMessage = `Request failed: ${response.status}`;
+    const contentType = response.headers.get("Content-Type") ?? "";
+    if (contentType.includes("application/json")) {
+      try {
+        const data = await response.json();
+        if (typeof data?.error === "string") {
+          errorMessage = data.error;
+        } else if (typeof data?.message === "string") {
+          errorMessage = data.message;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+    if (response.status === 401) {
+      errorMessage = errorMessage || "Invalid username or password.";
+    }
+    throw new Error(errorMessage);
   }
   return response.json() as Promise<T>;
 }
@@ -36,7 +54,23 @@ async function textRequest(path: string, options: RequestOptions = {}) {
   const headers = new Headers(options.headers);
   if (options.token) headers.set("Authorization", `Bearer ${options.token}`);
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
-  if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+  if (!response.ok) {
+    let errorMessage = `Request failed: ${response.status}`;
+    const contentType = response.headers.get("Content-Type") ?? "";
+    if (contentType.includes("application/json")) {
+      try {
+        const data = await response.json();
+        if (typeof data?.error === "string") {
+          errorMessage = data.error;
+        } else if (typeof data?.message === "string") {
+          errorMessage = data.message;
+        }
+      } catch {
+        // ignore parse errors
+      }
+    }
+    throw new Error(errorMessage);
+  }
   return response.text();
 }
 
