@@ -20,16 +20,29 @@ import { searchEvents } from "./search.js";
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 const corsOrigin = process.env.CORS_ORIGIN ?? "*";
+const allowedOrigins = String(corsOrigin)
+  .split(/\s*,\s*/)
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 const corsOptions = {
-  origin: corsOrigin,
+  origin: function (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+    if (!origin) return callback(null, true); // allow non-browser requests
+    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) return callback(null, true);
+    return callback(new Error("CORS origin denied"), false);
+  },
   methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 204
 };
 
 app.use((request, response, next) => {
-  response.setHeader("Access-Control-Allow-Origin", corsOrigin);
+  const originHeader = request.get("origin");
+  if (allowedOrigins.includes("*")) {
+    response.setHeader("Access-Control-Allow-Origin", "*");
+  } else if (originHeader && allowedOrigins.includes(originHeader)) {
+    response.setHeader("Access-Control-Allow-Origin", originHeader);
+  }
   response.setHeader("Access-Control-Allow-Methods", "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   if (request.method === "OPTIONS") {
