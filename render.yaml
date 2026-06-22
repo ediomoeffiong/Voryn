@@ -23,6 +23,9 @@ services:
     plan: free
     buildCommand: npm install && npm run build --workspace frontend
     publishPath: frontend/dist
+    envVars:
+      - key: VITE_API_URL
+        value: https://voryn-backend.onrender.com
     headers:
       - path: /*
         headers:
