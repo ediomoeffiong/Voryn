@@ -103,8 +103,8 @@ export function getLocation(options: HomeOptions = {}) {
   return request<{ location: LocationContext; navigation: NavigationItem[]; interests: Interest[] }>(`/api/location${suffix}`);
 }
 
-export function getEvent(slug: string) {
-  return request<{ event: Event; related: Event[]; jsonLd: unknown }>(`/api/events/${slug}`);
+export function getEvent(slug: string, token?: string) {
+  return request<{ event: Event; related: Event[]; jsonLd: unknown; isRegistered?: boolean }>(`/api/events/${slug}`, { token });
 }
 
 export async function reserveEvent(slug: string) {
@@ -195,6 +195,10 @@ export function registerForEvent(token: string, slug: string) {
   return request<{ dashboard: ParticipantDashboard }>(`/api/portal/participant/register/${slug}`, { method: "POST", token });
 }
 
+export function cancelRegistrationForEvent(token: string, slug: string) {
+  return request<{ dashboard: ParticipantDashboard }>(`/api/portal/participant/register/${slug}`, { method: "DELETE", token });
+}
+
 export function downloadTicket(token: string, slug: string) {
   return textRequest(`/api/portal/participant/tickets/${slug}`, { token });
 }
@@ -207,7 +211,7 @@ export function updateNotifications(token: string, notifications: User["notifica
   });
 }
 
-export function updateParticipantProfile(token: string, input: { name: string; email: string }) {
+export function updateParticipantProfile(token: string, input: { name: string; email: string; profileImage?: string }) {
   return request<ParticipantDashboard>("/api/portal/participant/profile", {
     method: "PUT",
     token,
@@ -265,7 +269,7 @@ export function sendAnnouncement(token: string, input: { eventSlug: string; subj
   });
 }
 
-export function updateOrganizerProfile(token: string, input: { name: string; organizerName: string; bio: string; website: string }) {
+export function updateOrganizerProfile(token: string, input: { name: string; organizerName: string; bio: string; website: string; profileImage?: string }) {
   return request<OrganizerDashboard>("/api/portal/organizer/profile", {
     method: "PUT",
     token,

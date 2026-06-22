@@ -118,6 +118,7 @@ export type User = {
   favorites: string[];
   following: string[];
   notifications: { email: boolean; push: boolean; smsReady: boolean };
+  profileImage?: string;
 };
 
 export type Registration = {

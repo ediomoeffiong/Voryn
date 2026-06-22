@@ -24,6 +24,7 @@ type User = {
     push: boolean;
     smsReady: boolean;
   };
+  profileImage?: string;
 };
 
 type Registration = {
@@ -76,7 +77,8 @@ export const users: User[] = [
     lastDashboard: "participant",
     favorites: ["lagos-tech-meetup-2026"],
     following: ["startup-lagos"],
-    notifications: { email: true, push: true, smsReady: false }
+    notifications: { email: true, push: true, smsReady: false },
+    profileImage: ""
   },
   {
     id: "user_organizer_demo",
@@ -88,7 +90,8 @@ export const users: User[] = [
     organizerSlug: "startup-lagos",
     favorites: [],
     following: [],
-    notifications: { email: true, push: true, smsReady: true }
+    notifications: { email: true, push: true, smsReady: true },
+    profileImage: ""
   },
   {
     id: "user_admin_demo",
@@ -99,7 +102,8 @@ export const users: User[] = [
     lastDashboard: "admin",
     favorites: [],
     following: [],
-    notifications: { email: true, push: true, smsReady: true }
+    notifications: { email: true, push: true, smsReady: true },
+    profileImage: ""
   }
 ];
 
@@ -185,7 +189,7 @@ function createToken(userId: string) {
   return token;
 }
 
-function currentUser(request: Request) {
+export function currentUser(request: Request) {
   const header = request.header("authorization");
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
   const userId = token ? sessions.get(token) : undefined;
@@ -586,6 +590,34 @@ export function registerPortalRoutes(app: import("express").Express) {
     response.json({ registration, dashboard: participantModel(user, request) });
   });
 
+  app.delete("/api/portal/participant/register/:slug", (request, response) => {
+    const user = requireRole(request, response, ["participant"]);
+    if (!user) return;
+    const event = publicEvents.find((item) => item.slug === request.params.slug);
+    if (!event) return response.status(404).json({ error: "Event not found" });
+    const regIndex = registrations.findIndex((item) => item.userId === user.id && item.eventSlug === event.slug);
+    if (regIndex !== -1) {
+      registrations.splice(regIndex, 1);
+      event.rsvpCount = Math.max(0, event.rsvpCount - 1);
+      event.attendeeCount = Math.max(0, event.attendeeCount - 1);
+      if (event.status !== "sold-out") event.ticketSalesCount = Math.max(0, event.ticketSalesCount - 1);
+
+      persistPortalState();
+      prisma.registration.deleteMany({
+        where: { userId: user.id, eventSlug: event.slug }
+      }).catch((err) => console.error("Failed to delete registration:", err));
+      prisma.event.update({
+        where: { slug: event.slug },
+        data: {
+          rsvpCount: event.rsvpCount,
+          attendeeCount: event.attendeeCount,
+          ticketSalesCount: event.ticketSalesCount
+        }
+      }).catch((err) => console.error("Failed to update event registration counts:", err));
+    }
+    response.json({ success: true, dashboard: participantModel(user, request) });
+  });
+
   app.get("/api/portal/participant/tickets/:slug", (request, response) => {
     const user = requireRole(request, response, ["participant"]);
     if (!user) return;
@@ -646,7 +678,12 @@ export function registerPortalRoutes(app: import("express").Express) {
     if (!user) return;
     user.name = String(request.body.name ?? user.name);
     user.email = String(request.body.email ?? user.email).trim().toLowerCase();
+    user.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : user.profileImage;
     persistPortalState();
+    prisma.user.update({
+      where: { id: user.id },
+      data: { name: user.name, email: user.email, profileImage: user.profileImage }
+    }).catch((err) => console.error("Failed to update user profile in DB:", err));
     response.json(participantModel(user, request));
   });
 
@@ -660,11 +697,23 @@ export function registerPortalRoutes(app: import("express").Express) {
     const user = requireRole(request, response, ["organizer"]);
     if (!user) return;
     user.name = String(request.body.name ?? user.name);
+    user.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : user.profileImage;
+    
     const organizer = organizerFor(user);
     organizer.name = String(request.body.organizerName ?? organizer.name);
     organizer.bio = String(request.body.bio ?? organizer.bio);
     organizer.website = String(request.body.website ?? organizer.website);
+    organizer.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : organizer.profileImage;
+    
     persistPortalState();
+    prisma.user.update({
+      where: { id: user.id },
+      data: { name: user.name, profileImage: user.profileImage }
+    }).catch((err) => console.error("Failed to update user profile image in DB:", err));
+    prisma.organizer.update({
+      where: { slug: organizer.slug },
+      data: { name: organizer.name, bio: organizer.bio, website: organizer.website, profileImage: organizer.profileImage }
+    }).catch((err) => console.error("Failed to update organizer profile image in DB:", err));
     response.json(organizerModel(user));
   });
 
@@ -693,7 +742,8 @@ export function registerPortalRoutes(app: import("express").Express) {
       media: {
         coverImage: String(request.body.coverImage ?? "https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=1400&q=80"),
         heroImage: String(request.body.heroImage ?? "https://images.unsplash.com/photo-1505373877841-8d25f7d46678?auto=format&fit=crop&w=1900&q=80"),
-        thumbnail: String(request.body.thumbnail ?? "https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=700&q=80")
+        thumbnail: String(request.body.thumbnail ?? "https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=700&q=80"),
+        gallery: Array.isArray(request.body.gallery) ? request.body.gallery.map(String) : []
       },
       attendeeCount: 0,
       rsvpCount: 0,
@@ -750,7 +800,8 @@ export function registerPortalRoutes(app: import("express").Express) {
         ...event.media,
         coverImage: request.body.coverImage ?? event.media.coverImage,
         heroImage: request.body.heroImage ?? event.media.heroImage,
-        thumbnail: request.body.thumbnail ?? event.media.thumbnail
+        thumbnail: request.body.thumbnail ?? event.media.thumbnail,
+        gallery: Array.isArray(request.body.gallery) ? request.body.gallery.map(String) : (event.media.gallery ?? [])
       }
     });
     updateEventVisibility(event);

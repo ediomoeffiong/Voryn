@@ -34,7 +34,8 @@ import {
   Ticket,
   Trash2,
   Users,
-  UsersRound
+  UsersRound,
+  XCircle
 } from "lucide-react";
 import {
   adminLogin,
@@ -66,7 +67,8 @@ import {
   updateOrganizerEvent,
   updateOrganizerProfile,
   updateParticipantProfile,
-  removeFavoriteEvent
+  removeFavoriteEvent,
+  cancelRegistrationForEvent
 } from "./api";
 import type {
   AdminDashboard,
@@ -83,6 +85,57 @@ import type {
   Role,
   User
 } from "./types";
+
+const toBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (error) => reject(error);
+  });
+
+function ImageSlider({ images }: { images: string[] }) {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  const prevSlide = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setCurrentIndex((prev) => (prev === 0 ? images.length - 1 : prev - 1));
+  };
+
+  const nextSlide = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setCurrentIndex((prev) => (prev === images.length - 1 ? 0 : prev + 1));
+  };
+
+  return (
+    <div className="image-slider">
+      <button onClick={prevSlide} className="slider-arrow prev" aria-label="Previous image">
+        &#10094;
+      </button>
+      <div className="slider-track" style={{ transform: `translateX(-${currentIndex * 100}%)` }}>
+        {images.map((img, idx) => (
+          <div className="slider-slide" key={idx}>
+            <img src={img} alt={`Slide ${idx + 1}`} />
+          </div>
+        ))}
+      </div>
+      <button onClick={nextSlide} className="slider-arrow next" aria-label="Next image">
+        &#10095;
+      </button>
+      <div className="slider-dots">
+        {images.map((_, idx) => (
+          <button
+            key={idx}
+            type="button"
+            className={`slider-dot ${idx === currentIndex ? "active" : ""}`}
+            onClick={(e) => { e.preventDefault(); setCurrentIndex(idx); }}
+            aria-label={`Go to slide ${idx + 1}`}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function useAsync<T>(load: () => Promise<T>, deps: unknown[]) {
   const [data, setData] = useState<T | null>(null);
@@ -750,10 +803,17 @@ function SearchPage() {
 function CityPage() {
   const { city = "" } = useParams();
   const { data, error, loading } = useAsync<CityDiscoveryModel>(() => getCity(city), [city]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (data) document.title = `${data.city.name} events | Voryn`;
   }, [data]);
+
+  useEffect(() => {
+    if (error && (error.includes("404") || error.toLowerCase().includes("not found"))) {
+      navigate("/404", { replace: true });
+    }
+  }, [error, navigate]);
 
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "City not found"} />;
@@ -839,11 +899,19 @@ function CityPage() {
 
 function EventPage() {
   const { slug = "" } = useParams();
-  const { data, error, loading } = useAsync(() => getEvent(slug), [slug]);
+  const auth = useAuthSession();
+  const { data, error, loading } = useAsync(() => getEvent(slug, auth.token || undefined), [slug, auth.token]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (data) document.title = `${data.event.title} | Voryn`;
   }, [data]);
+
+  useEffect(() => {
+    if (error && (error.includes("404") || error.toLowerCase().includes("not found"))) {
+      navigate("/404", { replace: true });
+    }
+  }, [error, navigate]);
 
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Event not found"} />;
@@ -851,9 +919,10 @@ function EventPage() {
   return <EventPageContent data={data} />;
 }
 
-function EventPageContent({ data }: { data: { event: Event; related: Event[]; jsonLd: unknown } }) {
+function EventPageContent({ data }: { data: { event: Event; related: Event[]; jsonLd: unknown; isRegistered?: boolean } }) {
   const { event, related } = data;
   const [liveEvent, setLiveEvent] = useState(event);
+  const [isRegistered, setIsRegistered] = useState(data.isRegistered ?? false);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const auth = useAuthSession();
   const canUseAttendeeActions = Boolean(auth.user && auth.token && auth.user.role !== "admin");
@@ -900,10 +969,17 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               disabled={isCancelled}
               onClick={async () => {
                 if (canUseAttendeeActions && auth.token) {
-                  const result = await registerForEvent(auth.token, shownEvent.slug);
-                  const updated = result.dashboard.history.find((item) => item.slug === shownEvent.slug);
-                  if (updated) setLiveEvent(updated);
-                  setTicketAction("Registered with reminders");
+                  if (isRegistered) {
+                    await cancelRegistrationForEvent(auth.token, shownEvent.slug);
+                    setIsRegistered(false);
+                    setTicketAction("Registration cancelled");
+                  } else {
+                    const result = await registerForEvent(auth.token, shownEvent.slug);
+                    const updated = result.dashboard.history.find((item) => item.slug === shownEvent.slug);
+                    if (updated) setLiveEvent(updated);
+                    setIsRegistered(true);
+                    setTicketAction("Registered with reminders");
+                  }
                 } else {
                   const result = await reserveEvent(shownEvent.slug);
                   setLiveEvent(result.event);
@@ -911,18 +987,33 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
                 }
               }}
             >
-              <Ticket size={18} />
-              {isCancelled ? "Cancelled" : canUseAttendeeActions ? "Register" : isSoldOut ? "Join waitlist" : "Reserve spot"}
+              {isRegistered ? <XCircle size={18} /> : <Ticket size={18} />}
+              {isCancelled ? "Cancelled" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : isSoldOut ? "Join waitlist" : "Reserve spot"}
             </button>
             {canUseAttendeeActions && auth.token ? (
-              <button
-                onClick={async () => {
-                  await favoriteEvent(auth.token, shownEvent.slug);
-                  setTicketAction("Event saved");
-                }}
-              >
-                <Heart size={18} /> Save event
-              </button>
+              auth.user?.favorites.includes(shownEvent.slug) ? (
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    const result = await removeFavoriteEvent(auth.token!, shownEvent.slug);
+                    auth.setAuth(auth.token!, result.user);
+                    setTicketAction("Event unsaved");
+                  }}
+                >
+                  <Heart size={18} fill="currentColor" className="heart-icon-filled" /> Unsave
+                </button>
+              ) : (
+                <button
+                  className="secondary"
+                  onClick={async () => {
+                    const result = await favoriteEvent(auth.token!, shownEvent.slug);
+                    auth.setAuth(auth.token!, result.user);
+                    setTicketAction("Event saved");
+                  }}
+                >
+                  <Heart size={18} /> Save
+                </button>
+              )
             ) : (
               <Link to="/login">
                 <Shield size={18} /> Log in for tickets
@@ -961,7 +1052,11 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             {shownEvent.summary} Expect curated sessions, visible community momentum, and a setting designed for people who want more than a calendar listing.
           </p>
           <div className="media-slots">
-            <div>Gallery ready</div>
+            {shownEvent.media.gallery && shownEvent.media.gallery.length > 0 ? (
+              <ImageSlider images={shownEvent.media.gallery} />
+            ) : (
+              <div className="no-gallery">Gallery empty</div>
+            )}
             <div>Video trailer ready</div>
             <div>Organizer media ready</div>
           </div>
@@ -1002,10 +1097,17 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
 function OrganizerPage() {
   const { slug = "" } = useParams();
   const { data, error, loading } = useAsync(() => getOrganizer(slug), [slug]);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (data) document.title = `${data.organizer.name} events | Voryn`;
   }, [data]);
+
+  useEffect(() => {
+    if (error && (error.includes("404") || error.toLowerCase().includes("not found"))) {
+      navigate("/404", { replace: true });
+    }
+  }, [error, navigate]);
 
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Organizer not found"} />;
@@ -1203,13 +1305,15 @@ function DashboardNav({
   role,
   token,
   setAuth,
-  logout
+  logout,
+  user
 }: {
   title: string;
   role: string;
   token: string;
   setAuth: (token: string, user: User) => void;
   logout: () => void;
+  user: User;
 }) {
   const navigate = useNavigate();
   return (
@@ -1220,6 +1324,11 @@ function DashboardNav({
       </Link>
       <strong>{title}</strong>
       <div className="dashboard-role">
+        {user.profileImage ? (
+          <img src={user.profileImage} alt="" className="user-avatar" />
+        ) : (
+          <div className="user-avatar-fallback">{user.name.charAt(0).toUpperCase()}</div>
+        )}
         <span>{role === "participant" ? "attendee" : role}</span>
         <button onClick={logout}>
           <LogOut size={17} /> Log out
@@ -1294,10 +1403,14 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
     startsAt: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString(),
     venue: "TBA",
     priceLabel: "Free",
-    summary: "A new event for the Voryn community."
+    summary: "A new event for the Voryn community.",
+    coverImage: "",
+    heroImage: "",
+    thumbnail: "",
+    gallery: [] as string[]
   });
-  const [profile, setProfile] = useState({ name: user.name, organizerName: "", bio: "", website: "" });
-  const { data, error, loading } = useAsync<OrganizerDashboard>(() => getOrganizerDashboard(token), [token, tab, refreshKey]);
+  const [profile, setProfile] = useState({ name: user.name, organizerName: "", bio: "", website: "", profileImage: user.profileImage || "" });
+  const { data, error, loading } = useAsync<OrganizerDashboard>(() => getOrganizerDashboard(token), [token, refreshKey]);
   const tabs = ["Overview", "My Events", "Create Event", "Analytics", "Attendees", "Revenue", "Profile", "Settings"];
 
   useEffect(() => {
@@ -1306,10 +1419,11 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
         name: data.user.name,
         organizerName: data.organizer.name,
         bio: data.organizer.bio,
-        website: data.organizer.website
+        website: data.organizer.website,
+        profileImage: data.user.profileImage || ""
       });
     }
-  }, [data?.organizer.slug]);
+  }, [data?.organizer.slug, data?.user.profileImage]);
 
   useEffect(() => {
     if (error?.includes("401")) {
@@ -1351,7 +1465,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
 
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Organizer Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      <DashboardNav title="Organizer Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} user={data.user} />
       {user.role !== "admin" ? <FloatingDashboardSwitch active="organizer" token={token} setAuth={setAuth} /> : null}
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
@@ -1438,6 +1552,76 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
             <input value={draft.startsAt} onChange={(event) => setDraft({ ...draft, startsAt: event.target.value })} />
             <input value={draft.venue} onChange={(event) => setDraft({ ...draft, venue: event.target.value })} placeholder="Venue" />
             <input value={draft.priceLabel} onChange={(event) => setDraft({ ...draft, priceLabel: event.target.value })} placeholder="Price" />
+            
+            <div className="image-input-group">
+              <label>Hero Image</label>
+              <input value={draft.heroImage} onChange={(event) => setDraft({ ...draft, heroImage: event.target.value })} placeholder="Hero Image URL" />
+              <input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  const base64 = await toBase64(file);
+                  setDraft({ ...draft, heroImage: base64 });
+                }
+              }} />
+            </div>
+
+            <div className="image-input-group">
+              <label>Cover Image</label>
+              <input value={draft.coverImage} onChange={(event) => setDraft({ ...draft, coverImage: event.target.value })} placeholder="Cover Image URL" />
+              <input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  const base64 = await toBase64(file);
+                  setDraft({ ...draft, coverImage: base64 });
+                }
+              }} />
+            </div>
+
+            <div className="image-input-group">
+              <label>Thumbnail Image</label>
+              <input value={draft.thumbnail} onChange={(event) => setDraft({ ...draft, thumbnail: event.target.value })} placeholder="Thumbnail Image URL" />
+              <input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  const base64 = await toBase64(file);
+                  setDraft({ ...draft, thumbnail: base64 });
+                }
+              }} />
+            </div>
+
+            <div className="image-slider-manager">
+              <label>Event Description Image Slider (Gallery)</label>
+              <div className="slider-manager-list">
+                {draft.gallery.map((img, idx) => (
+                  <div key={idx} className="slider-manager-item">
+                    <img src={img} alt="" />
+                    <button type="button" onClick={() => setDraft({ ...draft, gallery: draft.gallery.filter((_, i) => i !== idx) })}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <div className="slider-manager-adder">
+                <input id="slider-url-input" placeholder="Paste image URL here" onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const input = e.currentTarget;
+                    if (input.value) {
+                      setDraft({ ...draft, gallery: [...draft.gallery, input.value] });
+                      input.value = "";
+                    }
+                  }
+                }} />
+                <input type="file" accept="image/*" onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  if (file) {
+                    const base64 = await toBase64(file);
+                    setDraft({ ...draft, gallery: [...draft.gallery, base64] });
+                  }
+                }} />
+              </div>
+            </div>
+
             <textarea value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} />
             <button className="solid-dark" type="submit">
               <Plus size={18} /> Create event
@@ -1446,16 +1630,74 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
         ) : null}
 
         {tab === "Analytics" ? (
-          <div className="portal-card portal-table">
-            {data.analytics.map((item) => (
-              <div className="portal-row" key={item.eventSlug}>
-                <strong>{item.title}</strong>
-                <span>{item.rsvpCount.toLocaleString()} RSVPs</span>
-                <span>{item.ticketSalesCount.toLocaleString()} tickets</span>
-                <span>{money(item.revenue)}</span>
-                <span>{Math.round(item.conversionRate * 100)}% conversion</span>
+          <div className="analytics-dashboard">
+            <div className="analytics-summary-grid">
+              <div className="analytics-summary-card">
+                <h3>Overall Conversion</h3>
+                <div className="metric-value">
+                  {data.analytics.length > 0
+                    ? Math.round(
+                        (data.analytics.reduce((sum, item) => sum + item.conversionRate, 0) /
+                          data.analytics.length) *
+                          100
+                      )
+                    : 0}
+                  %
+                </div>
+                <p>Average registration success</p>
               </div>
-            ))}
+              <div className="analytics-summary-card">
+                <h3>Total RSVPs</h3>
+                <div className="metric-value">
+                  {data.analytics.reduce((sum, item) => sum + item.rsvpCount, 0).toLocaleString()}
+                </div>
+                <p>Accumulated event interest</p>
+              </div>
+              <div className="analytics-summary-card">
+                <h3>Ticket Revenue</h3>
+                <div className="metric-value">
+                  {money(data.analytics.reduce((sum, item) => sum + item.revenue, 0))}
+                </div>
+                <p>Direct ticket sales</p>
+              </div>
+            </div>
+            
+            <h2 className="section-title">Event Performance Analytics</h2>
+            <div className="analytics-list">
+              {data.analytics.map((item) => (
+                <div className="analytics-card" key={item.eventSlug}>
+                  <div className="analytics-card-header">
+                    <h4>{item.title}</h4>
+                    <span className="analytics-revenue">{money(item.revenue)}</span>
+                  </div>
+                  
+                  <div className="analytics-stats-row">
+                    <div className="stat-item">
+                      <span className="stat-label">RSVPs</span>
+                      <span className="stat-value">{item.rsvpCount.toLocaleString()}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Tickets Sold</span>
+                      <span className="stat-value">{item.ticketSalesCount.toLocaleString()}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="stat-label">Attendee Count</span>
+                      <span className="stat-value">{item.attendeeCount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <div className="analytics-conversion">
+                    <div className="conversion-header">
+                      <span>Conversion Rate</span>
+                      <strong>{Math.round(item.conversionRate * 100)}%</strong>
+                    </div>
+                    <div className="progress-bar-bg">
+                      <div className="progress-bar-fill" style={{ width: `${Math.round(item.conversionRate * 100)}%` }} />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -1489,13 +1731,27 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
             className="portal-card form-grid"
             onSubmit={async (event) => {
               event.preventDefault();
-              await updateOrganizerProfile(token, profile);
+              const result = await updateOrganizerProfile(token, profile);
+              setAuth(token, result.user);
               setRefreshKey((value) => value + 1);
             }}
           >
             <input value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} placeholder="Account name" />
             <input value={profile.organizerName} onChange={(event) => setProfile({ ...profile, organizerName: event.target.value })} placeholder="Organizer name" />
             <input value={profile.website} onChange={(event) => setProfile({ ...profile, website: event.target.value })} placeholder="Website" />
+            
+            <div className="image-input-group">
+              <label>Profile Picture</label>
+              <input value={profile.profileImage} onChange={(event) => setProfile({ ...profile, profileImage: event.target.value })} placeholder="Profile Image URL" />
+              <input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  const base64 = await toBase64(file);
+                  setProfile({ ...profile, profileImage: base64 });
+                }
+              }} />
+            </div>
+
             <textarea value={profile.bio} onChange={(event) => setProfile({ ...profile, bio: event.target.value })} />
             <button className="solid-dark" type="submit">
               <Settings size={18} /> Save profile
@@ -1536,13 +1792,13 @@ function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: 
   const [tab, setTab] = useState("Overview");
   const [ticketText, setTicketText] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
-  const [profile, setProfile] = useState({ name: user.name, email: user.email });
-  const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, tab, refreshKey]);
+  const [profile, setProfile] = useState({ name: user.name, email: user.email, profileImage: user.profileImage || "" });
+  const { data, error, loading } = useAsync<ParticipantDashboard>(() => getParticipantDashboard(token), [token, refreshKey]);
   const tabs = ["Overview", "Favorites", "Upcoming", "Past", "History", "Tickets", "Notifications", "Reviews", "Profile"];
 
   useEffect(() => {
-    if (data) setProfile({ name: data.user.name, email: data.user.email });
-  }, [data?.user.id]);
+    if (data) setProfile({ name: data.user.name, email: data.user.email, profileImage: data.user.profileImage || "" });
+  }, [data?.user.id, data?.user.profileImage]);
 
   useEffect(() => {
     if (error?.includes("401")) {
@@ -1557,7 +1813,7 @@ function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: 
 
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Attendee Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      <DashboardNav title="Attendee Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} user={data.user} />
       {user.role !== "admin" ? <FloatingDashboardSwitch active="participant" token={token} setAuth={setAuth} /> : null}
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
@@ -1693,12 +1949,26 @@ function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: 
             className="portal-card form-grid"
             onSubmit={async (event) => {
               event.preventDefault();
-              await updateParticipantProfile(token, profile);
+              const result = await updateParticipantProfile(token, profile);
+              setAuth(token, result.user);
               setRefreshKey((value) => value + 1);
             }}
           >
             <input value={profile.name} onChange={(event) => setProfile({ ...profile, name: event.target.value })} placeholder="Name" />
             <input value={profile.email} onChange={(event) => setProfile({ ...profile, email: event.target.value })} placeholder="Email" />
+            
+            <div className="image-input-group">
+              <label>Profile Picture</label>
+              <input value={profile.profileImage} onChange={(event) => setProfile({ ...profile, profileImage: event.target.value })} placeholder="Profile Image URL" />
+              <input type="file" accept="image/*" onChange={async (event) => {
+                const file = event.target.files?.[0];
+                if (file) {
+                  const base64 = await toBase64(file);
+                  setProfile({ ...profile, profileImage: base64 });
+                }
+              }} />
+            </div>
+
             <button className="solid-dark" type="submit">
               <Settings size={18} /> Save profile
             </button>
@@ -1729,7 +1999,7 @@ function AdminDashboardContent({ token, user, setAuth, logout }: { token: string
   if (error || !data) return <ErrorState message={error ?? "Admin unavailable"} />;
   return (
     <main className="dashboard-shell">
-      <DashboardNav title="Admin Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} />
+      <DashboardNav title="Admin Portal" role={user.role} token={token} setAuth={setAuth} logout={logout} user={user} />
       <section className="dashboard-main admin-main">
         <div className="dashboard-heading">
           <span>Platform management</span>
@@ -1766,6 +2036,25 @@ function AdminDashboardContent({ token, user, setAuth, logout }: { token: string
   );
 }
 
+function NotFoundPage() {
+  return (
+    <main className="not-found-container">
+      <BrandNav />
+      <section className="not-found-content">
+        <div className="not-found-card">
+          <div className="glass-glow" />
+          <span className="not-found-eyebrow">404 Error</span>
+          <h1>Page Not Found</h1>
+          <p>The page you are looking for does not exist, has been removed, or is a private draft.</p>
+          <Link to="/" className="solid-dark-button">
+            Go back home
+          </Link>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function App() {
   return (
     <Routes>
@@ -1779,7 +2068,9 @@ function App() {
       <Route path="/admin" element={<AdminDashboardPage />} />
       <Route path="/events/:slug" element={<EventPage />} />
       <Route path="/organizers/:slug" element={<OrganizerPage />} />
+      <Route path="/404" element={<NotFoundPage />} />
       <Route path="/:city" element={<CityPage />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );
 }

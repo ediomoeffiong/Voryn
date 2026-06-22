@@ -65,6 +65,7 @@ model User {
   favorites     String[]
   following     String[]
   notifications Json
+  profileImage  String?
 }
 
 model Registration {

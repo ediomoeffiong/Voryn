@@ -87,6 +87,7 @@ export async function initDb() {
             favorites: user.favorites,
             following: user.following,
             notifications: user.notifications,
+            profileImage: user.profileImage,
           }
         });
       }
@@ -165,7 +166,8 @@ export async function initDb() {
         organizerSlug: u.organizerSlug ?? undefined,
         favorites: u.favorites,
         following: u.following,
-        notifications: u.notifications as any
+        notifications: u.notifications as any,
+        profileImage: u.profileImage ?? undefined
       })));
 
       // Load Registrations

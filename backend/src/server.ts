@@ -13,7 +13,7 @@ import {
   recommendedEvents,
   resolveLocation
 } from "./personalization.js";
-import { registerPortalRoutes } from "./portal.js";
+import { registerPortalRoutes, currentUser, registrations } from "./portal.js";
 import { eventJsonLd } from "./seo.js";
 import { searchEvents } from "./search.js";
 
@@ -115,7 +115,17 @@ app.get("/api/events/:slug", (request, response) => {
     .filter((item) => item.slug !== event.slug && item.category === event.category)
     .slice(0, 3);
 
-  return response.json({ event, jsonLd: eventJsonLd(event), related });
+  let isRegistered = false;
+  try {
+    const user = currentUser(request);
+    if (user) {
+      isRegistered = registrations.some((reg) => reg.userId === user.id && reg.eventSlug === event.slug);
+    }
+  } catch (err) {
+    console.error("Error resolving currentUser in public event route:", err);
+  }
+
+  return response.json({ event, jsonLd: eventJsonLd(event), related, isRegistered });
 });
 
 app.post("/api/events/:slug/rsvp", (request, response) => {
