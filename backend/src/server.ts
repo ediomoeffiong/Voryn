@@ -20,7 +20,15 @@ import { searchEvents } from "./search.js";
 const app = express();
 const port = Number(process.env.PORT ?? 4000);
 
-app.use(cors({ origin: process.env.CORS_ORIGIN ?? true }));
+const corsOptions = {
+  origin: process.env.CORS_ORIGIN ?? true,
+  methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(express.json());
 registerPortalRoutes(app);
 
