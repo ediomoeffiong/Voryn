@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { cities, organizers, publicEvents } from "./data.js";
+import { addEventToStore, cities, organizers, publicEvents, removeEventFromStore, syncPublicEvents, updateEventVisibility, events as allEvents } from "./data.js";
 import { prisma } from "./db.js";
 import type { Event, EventStatus, Interest } from "./domain.js";
 import { interests } from "./personalization.js";
@@ -113,7 +113,7 @@ function persistPortalState() {
     reviews,
     sessions: [...sessions.entries()],
     organizers,
-    publicEvents
+    events: allEvents
   };
   mkdirSync(dirname(storePath), { recursive: true });
   writeFileSync(storePath, JSON.stringify(payload, null, 2));
@@ -129,6 +129,7 @@ function loadPortalState() {
       reviews?: Review[];
       sessions?: [string, string][];
       organizers?: typeof organizers;
+      events?: typeof allEvents;
       publicEvents?: typeof publicEvents;
     };
     if (payload.users?.length) {
@@ -155,9 +156,14 @@ function loadPortalState() {
       organizers.length = 0;
       organizers.push(...payload.organizers);
     }
-    if (payload.publicEvents?.length) {
-      publicEvents.length = 0;
-      publicEvents.push(...payload.publicEvents);
+    if (payload.events?.length) {
+      allEvents.length = 0;
+      allEvents.push(...payload.events);
+      syncPublicEvents();
+    } else if (payload.publicEvents?.length) {
+      allEvents.length = 0;
+      allEvents.push(...payload.publicEvents);
+      syncPublicEvents();
     }
   } catch (error) {
     console.error("Failed to load portal store:", error);
@@ -329,7 +335,7 @@ function participantModel(user: User, request: Request) {
 
 function organizerModel(user: User) {
   const organizer = organizerFor(user);
-  const events = publicEvents.filter((event) => event.organizerSlug === organizer.slug);
+  const events = allEvents.filter((event) => event.organizerSlug === organizer.slug);
   const organizerRegistrations = registrations.filter((registration) =>
     events.some((event) => event.slug === registration.eventSlug)
   );
@@ -370,15 +376,15 @@ function adminModel() {
   return {
     users: users.map(safeUser),
     organizers,
-    events: publicEvents,
+    events: allEvents,
     registrations,
     reports: reviews.filter((review) => review.rating <= 2),
     analytics: {
       users: users.length,
       organizers: organizers.length,
-      events: publicEvents.length,
+      events: allEvents.length,
       registrations: registrations.length,
-      revenue: publicEvents.reduce((total, event) => total + eventRevenue(event), 0)
+      revenue: allEvents.reduce((total, event) => total + eventRevenue(event), 0)
     }
   };
 }
@@ -671,7 +677,7 @@ export function registerPortalRoutes(app: import("express").Express) {
     const event: Event = {
       id: `evt_${Date.now()}`,
       title,
-      slug: uniqueSlug(title, new Set(publicEvents.map((item) => item.slug))),
+      slug: uniqueSlug(title, new Set(allEvents.map((item) => item.slug))),
       citySlug: city.slug,
       country: city.country,
       category: interests.includes(request.body.category) ? request.body.category : "Technology",
@@ -695,7 +701,7 @@ export function registerPortalRoutes(app: import("express").Express) {
       badges: ["recently-added"],
       priceLabel: String(request.body.priceLabel ?? "Free")
     };
-    publicEvents.push(event);
+    addEventToStore(event);
     persistPortalState();
     prisma.event.create({
       data: {
@@ -726,7 +732,7 @@ export function registerPortalRoutes(app: import("express").Express) {
   app.put("/api/portal/organizer/events/:slug", (request, response) => {
     const user = requireRole(request, response, ["organizer"]);
     if (!user) return;
-    const event = publicEvents.find((item) => item.slug === request.params.slug);
+    const event = allEvents.find((item) => item.slug === request.params.slug);
     if (!event) return response.status(404).json({ error: "Event not found" });
     if (user.role !== "admin" && event.organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
     const city = cities.find((item) => item.slug === request.body.citySlug);
@@ -747,6 +753,7 @@ export function registerPortalRoutes(app: import("express").Express) {
         thumbnail: request.body.thumbnail ?? event.media.thumbnail
       }
     });
+    updateEventVisibility(event);
     persistPortalState();
 
     prisma.event.update({
@@ -771,10 +778,11 @@ export function registerPortalRoutes(app: import("express").Express) {
   app.delete("/api/portal/organizer/events/:slug", (request, response) => {
     const user = requireRole(request, response, ["organizer"]);
     if (!user) return;
-    const index = publicEvents.findIndex((event) => event.slug === request.params.slug);
+    const index = allEvents.findIndex((event) => event.slug === request.params.slug);
     if (index === -1) return response.status(404).json({ error: "Event not found" });
-    if (user.role !== "admin" && publicEvents[index].organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
-    const [event] = publicEvents.splice(index, 1);
+    if (user.role !== "admin" && allEvents[index].organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
+    const event = allEvents[index];
+    removeEventFromStore(event.slug);
     persistPortalState();
 
     prisma.event.delete({

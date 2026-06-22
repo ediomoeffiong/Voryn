@@ -386,7 +386,37 @@ export const events: Event[] = [
   }
 ];
 
-export const publicEvents = events.filter((event) => event.status !== "draft");
+export const publicEvents: Event[] = [];
+
+export function syncPublicEvents() {
+  publicEvents.length = 0;
+  publicEvents.push(...events.filter((event) => event.status !== "draft"));
+}
+
+export function addEventToStore(event: Event) {
+  events.push(event);
+  if (event.status !== "draft") {
+    publicEvents.push(event);
+  }
+}
+
+export function updateEventVisibility(event: Event) {
+  const index = publicEvents.findIndex((item) => item.slug === event.slug);
+  if (event.status !== "draft") {
+    if (index === -1) publicEvents.push(event);
+  } else if (index !== -1) {
+    publicEvents.splice(index, 1);
+  }
+}
+
+export function removeEventFromStore(slug: string) {
+  const eventIndex = events.findIndex((item) => item.slug === slug);
+  if (eventIndex !== -1) events.splice(eventIndex, 1);
+  const publicIndex = publicEvents.findIndex((item) => item.slug === slug);
+  if (publicIndex !== -1) publicEvents.splice(publicIndex, 1);
+}
+
+syncPublicEvents();
 
 export function getCity(slug: string) {
   return cities.find((city) => city.slug === slug);
@@ -394,6 +424,10 @@ export function getCity(slug: string) {
 
 export function getOrganizer(slug: string) {
   return organizers.find((organizer) => organizer.slug === slug);
+}
+
+export function getEventFromAll(slug: string) {
+  return events.find((event) => event.slug === slug);
 }
 
 export function getEvent(slug: string) {

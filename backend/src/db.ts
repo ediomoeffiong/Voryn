@@ -1,5 +1,5 @@
 import { PrismaClient } from "@prisma/client";
-import { cities, organizers, publicEvents } from "./data.js";
+import { cities, organizers, events, publicEvents, syncPublicEvents } from "./data.js";
 import { users, registrations, announcements, reviews, sessions } from "./portal.js";
 
 export const prisma = new PrismaClient();
@@ -128,8 +128,8 @@ export async function initDb() {
 
       // Load Events
       const dbEvents = await prisma.event.findMany();
-      publicEvents.length = 0;
-      publicEvents.push(...dbEvents.map(e => ({
+      events.length = 0;
+      events.push(...dbEvents.map(e => ({
         id: e.id,
         title: e.title,
         slug: e.slug,
@@ -150,6 +150,7 @@ export async function initDb() {
         badges: e.badges as any,
         priceLabel: e.priceLabel
       })));
+      syncPublicEvents();
 
       // Load Users
       const dbUsers = await prisma.user.findMany();
