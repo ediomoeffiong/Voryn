@@ -2,6 +2,8 @@
 
 ## Safety sequence
 
+The API now repairs missing legacy timestamps and safe required defaults before its first typed Prisma read. This prevents an unmigrated legacy `createdAt: null` from crashing startup, but it does not replace the backed-up Stage 2 migration below. The repair preserves non-null values and is safe to repeat on restart.
+
 1. Stop writes and create a provider-level MongoDB snapshot.
 2. Deploy code with `DATABASE_URL` configured, but do not start application traffic yet.
 3. Run `npm run migrate:stage2:dry-run --workspace backend`.

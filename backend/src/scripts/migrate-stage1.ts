@@ -6,9 +6,18 @@ import { isPasswordHash, normalizeEmail } from "../security.js";
 type Document = Record<string, unknown>;
 const collections = ["City", "Organizer", "Event", "User", "Registration", "Announcement", "Review", "Session", "PasswordResetToken"];
 
-async function documents(collection: string) {
-  const result = await prisma.$runCommandRaw({ find: collection, filter: {}, batchSize: 100000 }) as unknown as { cursor?: { firstBatch?: Document[] } };
-  return result.cursor?.firstBatch ?? [];
+async function documents(collection: string): Promise<Document[]> {
+  const result = collection === "City" ? await prisma.city.findRaw({ filter: {} })
+    : collection === "Organizer" ? await prisma.organizer.findRaw({ filter: {} })
+    : collection === "Event" ? await prisma.event.findRaw({ filter: {} })
+    : collection === "User" ? await prisma.user.findRaw({ filter: {} })
+    : collection === "Registration" ? await prisma.registration.findRaw({ filter: {} })
+    : collection === "Announcement" ? await prisma.announcement.findRaw({ filter: {} })
+    : collection === "Review" ? await prisma.review.findRaw({ filter: {} })
+    : collection === "Session" ? await prisma.session.findRaw({ filter: {} })
+    : await prisma.passwordResetToken.findRaw({ filter: {} });
+  if (!Array.isArray(result)) throw new Error(`Unexpected ${collection} query result`);
+  return result as Document[];
 }
 
 function idText(value: unknown) {
@@ -22,9 +31,7 @@ async function main() {
   const backupRoot = resolve(process.env.STAGE1_BACKUP_DIR ?? "backups", `stage1-${new Date().toISOString().replace(/[:.]/g, "-")}`);
   await prisma.$connect();
   const data = new Map<string, Document[]>();
-  for (const collection of collections) {
-    try { data.set(collection, await documents(collection)); } catch { data.set(collection, []); }
-  }
+  for (const collection of collections) data.set(collection, await documents(collection));
   const users = data.get("User") ?? [];
   const events = data.get("Event") ?? [];
   const registrations = data.get("Registration") ?? [];
@@ -50,7 +57,7 @@ async function main() {
   if (report.conflictsRequireReview) throw new Error("Conflicts require administrative review; no records were changed");
   await mkdir(backupRoot, { recursive: true });
   for (const [collection, records] of data) await writeFile(resolve(backupRoot, `${collection}.json`), JSON.stringify(records, null, 2), "utf8");
-  const now = new Date();
+  const now = { $date: new Date().toISOString() };
   await prisma.$runCommandRaw({ update: "User", updates: [{ q: { passwordResetRequired: { $exists: false } }, u: { $set: { passwordResetRequired: false, createdAt: now, updatedAt: now } }, multi: true }, { q: { password: { $not: { $regex: "^scrypt\\$" } } }, u: { $set: { passwordResetRequired: true } }, multi: true }] });
   await prisma.$runCommandRaw({ update: "Organizer", updates: [{ q: { createdAt: { $exists: false } }, u: { $set: { createdAt: now, updatedAt: now } }, multi: true }] });
   await prisma.$runCommandRaw({ update: "Event", updates: [{ q: { reservedCount: { $exists: false } }, u: { $set: { reservedCount: 0, createdAt: now, updatedAt: now } }, multi: true }] });

@@ -9,6 +9,42 @@ export function isDatabaseReady() {
   return ready;
 }
 
+// Legacy records may contain explicit null timestamps. Prisma's @default(now())
+// only applies to new writes, so these must be repaired before typed reads.
+async function repairLegacyTimestamps() {
+  // Raw MongoDB commands use Extended JSON, not JavaScript Date instances.
+  const now = { $date: new Date().toISOString() };
+  for (const collection of ["Event", "Organizer", "User", "TicketType", "EventLifecycleLog", "MediaAsset", "Session", "PasswordResetToken"] as const) {
+    const result = await prisma.$runCommandRaw({
+      update: collection,
+      updates: [
+        { q: { createdAt: null, updatedAt: { $type: "date" } }, u: [{ $set: { createdAt: "$updatedAt" } }], multi: true },
+        { q: { createdAt: null }, u: { $set: { createdAt: now } }, multi: true },
+        ...(["Event", "Organizer", "User", "TicketType"].includes(collection)
+          ? [{ q: { updatedAt: null }, u: { $set: { updatedAt: now } }, multi: true }]
+          : [])
+      ]
+    }) as { nModified?: number; writeErrors?: unknown[] };
+    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} timestamp repair failed`);
+    if (result.nModified) console.info(`Repaired ${result.nModified} legacy ${collection} timestamp records`);
+  }
+}
+
+async function repairLegacyRequiredDefaults() {
+  const defaults = [
+    { collection: "Event", values: { reservedCount: 0, tags: [], visibility: "public", previousSlugs: [], version: 1 } },
+    { collection: "Registration", values: { status: "active", quantity: 1, approvalStatus: "approved", paymentStatus: "not_required" } },
+    { collection: "User", values: { lastDashboard: "participant", passwordResetRequired: false } },
+    { collection: "TicketType", values: { reservedCount: 0, minPerOrder: 1, maxPerOrder: 1, visibility: "public", availability: "available", sortOrder: 0 } }
+  ] as const;
+  for (const { collection, values } of defaults) {
+    const updates = Object.entries(values).map(([field, value]) => ({ q: { [field]: null }, u: { $set: { [field]: value } }, multi: true }));
+    const result = await prisma.$runCommandRaw({ update: collection, updates }) as { nModified?: number; writeErrors?: unknown[] };
+    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} default repair failed`);
+    if (result.nModified) console.info(`Repaired ${result.nModified} legacy ${collection} default fields`);
+  }
+}
+
 function hydrate(dbCities: Awaited<ReturnType<typeof prisma.city.findMany>>, dbOrganizers: Awaited<ReturnType<typeof prisma.organizer.findMany>>, dbEvents: Awaited<ReturnType<typeof prisma.event.findMany>>) {
   cities.splice(0, cities.length, ...dbCities.map((city) => ({ ...city, coordinates: city.coordinates as City["coordinates"] })));
   organizers.splice(0, organizers.length, ...dbOrganizers.map((organizer) => ({ ...organizer, socials: organizer.socials as Organizer["socials"] })));
@@ -36,6 +72,8 @@ export async function initDb() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
   await prisma.$connect();
   await prisma.$runCommandRaw({ ping: 1 });
+  await repairLegacyTimestamps();
+  await repairLegacyRequiredDefaults();
   await seedDevelopmentFixtures();
   const [dbCities, dbOrganizers, dbEvents] = await Promise.all([prisma.city.findMany(), prisma.organizer.findMany(), prisma.event.findMany()]);
   hydrate(dbCities, dbOrganizers, dbEvents);
