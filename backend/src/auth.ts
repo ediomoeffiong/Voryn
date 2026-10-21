@@ -45,7 +45,15 @@ export async function currentUser(request: Request) {
     await prisma.session.delete({ where: { id: session.id } }).catch(() => undefined);
     return undefined;
   }
-  return (await prisma.user.findUnique({ where: { id: session.userId } })) ?? undefined;
+  const user = await prisma.user.findUnique({ where: { id: session.userId } });
+  if (!user || user.accountStatus !== "active") {
+    await prisma.session.deleteMany({ where: { userId: session.userId } });
+    return undefined;
+  }
+  if (!user.lastActiveAt || Date.now() - user.lastActiveAt.getTime() > 5 * 60 * 1000) {
+    await prisma.user.update({ where: { id: user.id }, data: { lastActiveAt: new Date() } }).catch(() => undefined);
+  }
+  return user;
 }
 
 export async function attachUser(request: Request, response: Response, next: NextFunction) {

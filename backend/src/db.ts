@@ -19,13 +19,13 @@ function writeErrorMessage(value: unknown) {
 async function repairLegacyTimestamps() {
   // Raw MongoDB commands use Extended JSON, not JavaScript Date instances.
   const now = { $date: new Date().toISOString() };
-  for (const collection of ["Event", "Organizer", "User", "TicketType", "EventLifecycleLog", "MediaAsset", "Session", "PasswordResetToken"] as const) {
+  for (const collection of ["Event", "Organizer", "User", "TicketType", "EventLifecycleLog", "MediaAsset", "Session", "PasswordResetToken", "Announcement", "Ticket", "CheckIn", "Notification", "ModerationReport", "AuditLog", "PlatformSetting", "OrganizerVerification"] as const) {
     const result = await prisma.$runCommandRaw({
       update: collection,
       updates: [
         { q: { createdAt: null, updatedAt: { $type: "date" } }, u: [{ $set: { createdAt: "$updatedAt" } }], multi: true },
         { q: { createdAt: null }, u: { $set: { createdAt: now } }, multi: true },
-        ...(["Event", "Organizer", "User", "TicketType"].includes(collection)
+        ...(["Event", "Organizer", "User", "TicketType", "Announcement", "ModerationReport", "PlatformSetting", "OrganizerVerification"].includes(collection)
           ? [{ q: { updatedAt: null }, u: { $set: { updatedAt: now } }, multi: true }]
           : [])
       ]
@@ -39,7 +39,8 @@ async function repairLegacyRequiredDefaults() {
   const defaults = [
     { collection: "Event", values: { reservedCount: 0, tags: [], visibility: "public", previousSlugs: [], version: 1 } },
     { collection: "Registration", values: { status: "active", quantity: 1, approvalStatus: "approved", paymentStatus: "not_required" } },
-    { collection: "User", values: { lastDashboard: "participant", passwordResetRequired: false } },
+    { collection: "User", values: { lastDashboard: "participant", passwordResetRequired: false, accountStatus: "active", interests: [] } },
+    { collection: "Organizer", values: { verificationStatus: "unverified", accountStatus: "active" } },
     { collection: "TicketType", values: { reservedCount: 0, minPerOrder: 1, maxPerOrder: 1, visibility: "public", availability: "available", sortOrder: 0 } }
   ] as const;
   for (const { collection, values } of defaults) {

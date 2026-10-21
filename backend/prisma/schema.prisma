@@ -30,6 +30,8 @@ model Organizer {
   socials              Json
   followers            Int
   totalAttendeesHosted Int
+  verificationStatus   String   @default("unverified")
+  accountStatus        String   @default("active")
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 }
@@ -153,6 +155,10 @@ model User {
   following             String[]
   notifications         Json
   profileImage          String?
+  accountStatus         String   @default("active")
+  interests             String[] @default([])
+  locationPreferences   Json?
+  lastActiveAt          DateTime?
   passwordResetRequired Boolean  @default(false)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
@@ -176,18 +182,135 @@ model Registration {
   answers      Json?
   approvalStatus String @default("approved")
   paymentStatus  String @default("not_required")
+  statusReason   String?
+  updatedAt      DateTime @updatedAt
 
   @@unique([userId, eventSlug])
-  @@index([eventSlug, status])
+  @@index([eventSlug, status, approvalStatus])
+  @@index([userId, status])
+  @@index([ticketCode])
 }
 
 model Announcement {
-  id            String @id @default(auto()) @map("_id") @db.ObjectId
-  organizerSlug String
-  eventSlug     String
-  subject       String
-  message       String
-  sentAt        String
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizerSlug   String
+  eventSlug       String
+  subject         String
+  message         String
+  audience        String   @default("confirmed")
+  status          String   @default("draft")
+  deliveryProvider String?
+  recipientCount  Int      @default(0)
+  scheduledAt     DateTime?
+  sentAt          String?
+  createdById     String?  @db.ObjectId
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([organizerSlug, createdAt])
+  @@index([eventSlug, status])
+}
+
+model Ticket {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  registrationId String   @unique @db.ObjectId
+  eventId        String   @db.ObjectId
+  ticketTypeId   String?  @db.ObjectId
+  codeHash       String   @unique
+  displayCode    String   @unique
+  status         String   @default("valid")
+  issuedAt       DateTime @default(now())
+  invalidatedAt  DateTime?
+
+  @@index([eventId, status])
+}
+
+model CheckIn {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  registrationId String   @db.ObjectId
+  ticketId       String   @db.ObjectId
+  eventId        String   @db.ObjectId
+  actorId        String   @db.ObjectId
+  action         String
+  reason         String?
+  occurredAt     DateTime @default(now())
+
+  @@index([registrationId, occurredAt])
+  @@index([eventId, occurredAt])
+}
+
+model Notification {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  userId    String   @db.ObjectId
+  category  String
+  title     String
+  message   String
+  eventSlug String?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt, createdAt])
+}
+
+model ModerationReport {
+  id             String   @id @default(auto()) @map("_id") @db.ObjectId
+  reporterId     String   @db.ObjectId
+  resourceType   String
+  resourceId     String
+  category       String
+  description    String
+  evidence       Json?
+  priority       String   @default("normal")
+  status         String   @default("open")
+  assignedToId   String?  @db.ObjectId
+  resolution     String?
+  resolvedById   String?  @db.ObjectId
+  resolvedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([status, priority, createdAt])
+  @@index([reporterId, createdAt])
+  @@index([resourceType, resourceId])
+}
+
+model AuditLog {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  actorId       String   @db.ObjectId
+  action        String
+  resourceType  String
+  resourceId    String
+  metadata      Json?
+  correlationId String?
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+}
+
+model PlatformSetting {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  key         String   @unique
+  value       Json
+  description String?
+  updatedById String   @db.ObjectId
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model OrganizerVerification {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  organizerId   String   @db.ObjectId
+  status        String   @default("pending")
+  notes         String?
+  reviewedById  String?  @db.ObjectId
+  reviewedAt    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([organizerId, createdAt])
+  @@index([status, createdAt])
 }
 
 model Review {

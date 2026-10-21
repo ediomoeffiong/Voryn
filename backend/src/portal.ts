@@ -53,7 +53,7 @@ function buildIcs(event: Event) {
 }
 
 async function participantModel(user: User, request: Request) {
-  const registrations = await prisma.registration.findMany({ where: { userId: user.id, status: "active" } });
+  const registrations = await prisma.registration.findMany({ where: { userId: user.id } });
   const eventSlugs = registrations.map((item) => item.eventSlug);
   const [registeredEvents, favorites, following, reviews] = await Promise.all([
     prisma.event.findMany({ where: { slug: { in: eventSlugs }, deletedAt: null } }),
@@ -67,7 +67,7 @@ async function participantModel(user: User, request: Request) {
     user: safeUser(user), favorites: favorites.map((event) => domainEvent(event)), following, registrations,
     upcoming: history.filter((event) => new Date(event.startsAt).getTime() >= now && event.status !== "cancelled"),
     past: history.filter((event) => new Date(event.startsAt).getTime() < now || event.status === "completed"),
-    history, reminders: registrations.flatMap((registration) => registration.reminders as Reminder[]), reviews,
+    history, reminders: registrations.filter((registration) => registration.status === "active").flatMap((registration) => registration.reminders as Reminder[]), reviews,
     calendar: Object.fromEntries(history.map((event) => [event.slug, eventCalendarLinks(request, event)]))
   };
 }
@@ -136,7 +136,9 @@ async function registerForEvent(user: User, slug: string, options: { ticketTypeI
     }
     const settings = (event.registration ?? { mode: "free" }) as { mode?: string; approvalRequired?: boolean };
     const approvalStatus = settings.mode === "approval" || settings.approvalRequired ? "pending" : "approved";
-    const registration = await prisma.registration.create({ data: { userId: user.id, eventId: event.id, eventSlug: event.slug, ticketTypeId: selectedTicket?.id, quantity, answers: options.answers as Prisma.InputJsonValue | undefined, approvalStatus, paymentStatus: "not_required", registeredAt: new Date().toISOString(), checkedIn: false, ticketCode: createTicketCode(), reminders: registrationReminders(event, user) as unknown as Prisma.InputJsonValue, status: "active" } });
+    const ticketCode = createTicketCode();
+    const registration = await prisma.registration.create({ data: { userId: user.id, eventId: event.id, eventSlug: event.slug, ticketTypeId: selectedTicket?.id, quantity, answers: options.answers as Prisma.InputJsonValue | undefined, approvalStatus, paymentStatus: "not_required", registeredAt: new Date().toISOString(), checkedIn: false, ticketCode, reminders: registrationReminders(event, user) as unknown as Prisma.InputJsonValue, status: "active" } });
+    if (approvalStatus === "approved") await prisma.ticket.create({ data: { registrationId: registration.id, eventId: event.id, ticketTypeId: selectedTicket?.id, codeHash: hashToken(ticketCode), displayCode: ticketCode } });
     const cached = cachedEvents.find((item) => item.slug === slug);
     if (cached) cached.rsvpCount += quantity;
     return registration;

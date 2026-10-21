@@ -13,7 +13,9 @@
     "migrate:stage1:dry-run": "tsx src/scripts/migrate-stage1.ts",
     "migrate:stage1": "tsx src/scripts/migrate-stage1.ts --apply",
     "migrate:stage2:dry-run": "tsx src/scripts/migrate-stage2.ts",
-    "migrate:stage2": "tsx src/scripts/migrate-stage2.ts --apply"
+    "migrate:stage2": "tsx src/scripts/migrate-stage2.ts --apply",
+    "migrate:stage3:dry-run": "tsx src/scripts/migrate-stage3.ts",
+    "migrate:stage3": "tsx src/scripts/migrate-stage3.ts --apply"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",

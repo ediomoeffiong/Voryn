@@ -17,6 +17,7 @@ import { searchEvents } from "./search.js";
 import { publicEvent, ticketsFor } from "./events.js";
 import { publishDueEvents } from "./scheduler.js";
 import { serveMedia } from "./media.js";
+import { registerStage3Routes } from "./stage3.js";
 
 function allowedOrigins() {
   const configured = (process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173")).split(",").map((value) => value.trim()).filter(Boolean);
@@ -45,6 +46,7 @@ export function createApp() {
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: "draft-8", legacyHeaders: false, message: { error: "Too many authentication attempts; try again later" } });
   app.use(["/api/auth/login", "/api/admin/auth/login", "/api/auth/signup", "/api/auth/password-reset/request", "/api/auth/password-reset/confirm"], authLimiter);
   registerPortalRoutes(app);
+  registerStage3Routes(app);
 
   app.get("/api/health", (_request, response) => response.json({ ok: true, service: "voryn-api" }));
   app.get("/api/media/files/:key", asyncHandler(serveMedia));
