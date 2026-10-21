@@ -92,6 +92,7 @@ import type {
   User
 } from "./types";
 import { EventBuilder } from "./EventBuilder";
+import { Stage3Dashboard } from "./Stage3Dashboard";
 
 const toBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -2105,10 +2106,12 @@ function App() {
       <Route path="/forgot-password" element={<PasswordResetPage />} />
       <Route path="/reset-password" element={<PasswordResetPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
-      <Route path="/attendee" element={<ParticipantDashboardPage />} />
-      <Route path="/participant" element={<ParticipantDashboardPage />} />
-      <Route path="/organizer" element={<OrganizerDashboardPage />} />
-      <Route path="/admin" element={<AdminDashboardPage />} />
+      <Route path="/attendee" element={<Stage3Dashboard />} />
+      <Route path="/participant" element={<Stage3Dashboard />} />
+      <Route path="/dashboard/*" element={<Stage3Dashboard />} />
+      <Route path="/organizer/manage" element={<OrganizerDashboardPage />} />
+      <Route path="/organizer/*" element={<Stage3Dashboard />} />
+      <Route path="/admin/*" element={<Stage3Dashboard />} />
       <Route path="/events/:slug" element={<EventPage />} />
       <Route path="/organizers/:slug" element={<OrganizerPage />} />
       <Route path="/404" element={<NotFoundPage />} />

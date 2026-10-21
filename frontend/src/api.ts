@@ -32,7 +32,7 @@ async function ensureCsrfToken() {
   return csrfToken;
 }
 
-async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) headers.set("X-CSRF-Token", await ensureCsrfToken());
@@ -62,7 +62,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return response.json() as Promise<T>;
 }
 
-async function textRequest(path: string, options: RequestOptions = {}) {
+export async function textRequest(path: string, options: RequestOptions = {}) {
   const headers = new Headers(options.headers);
   if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) headers.set("X-CSRF-Token", await ensureCsrfToken());
   const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });

@@ -51,6 +51,8 @@ export type Organizer = {
   socials: { x?: string; instagram?: string; linkedin?: string };
   followers: number;
   totalAttendeesHosted: number;
+  verificationStatus?: "unverified" | "pending" | "verified" | "rejected" | "suspended";
+  accountStatus?: "active" | "suspended";
 };
 
 export type Event = {
@@ -154,6 +156,11 @@ export type User = {
   following: string[];
   notifications: { email: boolean; push: boolean; smsReady: boolean };
   profileImage?: string;
+  accountStatus?: "active" | "suspended";
+  interests?: string[];
+  locationPreferences?: Record<string, unknown>;
+  lastActiveAt?: string;
+  createdAt?: string;
 };
 
 export type Registration = {
@@ -168,6 +175,9 @@ export type Registration = {
   ticketTypeId?: string;
   approvalStatus: "pending" | "approved" | "rejected";
   paymentStatus: "not_required" | "pending" | "verified" | "failed";
+  status?: "active" | "cancelled" | "expired";
+  statusReason?: string;
+  updatedAt?: string;
 };
 
 export type Reminder = {
