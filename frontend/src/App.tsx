@@ -39,7 +39,8 @@ import {
 } from "lucide-react";
 import {
   adminLogin,
-  adminSignup,
+  changePassword,
+  confirmPasswordReset,
   createOrganizerEvent,
   deleteOrganizerEvent,
   downloadTicket,
@@ -57,8 +58,8 @@ import {
   getParticipantDashboard,
   leaveReview,
   login,
+  logoutSession,
   registerForEvent,
-  reserveEvent,
   searchEvents,
   sendAnnouncement,
   signup,
@@ -68,6 +69,7 @@ import {
   updateOrganizerProfile,
   updateParticipantProfile,
   removeFavoriteEvent,
+  requestPasswordReset,
   cancelRegistrationForEvent
 } from "./api";
 import type {
@@ -202,90 +204,30 @@ function useBrowserCoordinates() {
   return coordinates;
 }
 
-let globalInitialized = false;
-let globalInitializingPromise: Promise<{ user: User | null }> | null = null;
-
 function useAuthSession() {
-  const [token, setToken] = useState(() => localStorage.getItem("voryn:token") ?? "");
-  const [user, setUser] = useState<User | null>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("voryn:user") ?? "null") as User | null;
-    } catch {
-      return null;
-    }
-  });
-  const [initialized, setInitialized] = useState(globalInitialized);
+  const [user, setUser] = useState<User | null>(null);
+  const [initialized, setInitialized] = useState(false);
 
   useEffect(() => {
-    const handler = () => {
-      setToken(localStorage.getItem("voryn:token") ?? "");
-      try {
-        setUser(JSON.parse(localStorage.getItem("voryn:user") ?? "null") as User | null);
-      } catch {
-        setUser(null);
-      }
-    };
-    window.addEventListener("voryn:auth", handler);
-    return () => window.removeEventListener("voryn:auth", handler);
+    let active = true;
+    getMe().then((result) => { if (active) setUser(result.user); }).catch(() => { if (active) setUser(null); }).finally(() => { if (active) setInitialized(true); });
+    return () => { active = false; };
   }, []);
 
-  useEffect(() => {
-    if (globalInitialized) {
-      setInitialized(true);
-      return;
-    }
-
-    const storedToken = localStorage.getItem("voryn:token");
-    if (storedToken) {
-      if (!globalInitializingPromise) {
-        globalInitializingPromise = getMe(storedToken)
-          .then((res: { user: User | null }) => {
-            if (!res.user) {
-              localStorage.removeItem("voryn:token");
-              localStorage.removeItem("voryn:user");
-              window.dispatchEvent(new Event("voryn:auth"));
-            }
-            return res;
-          })
-          .catch(() => {
-            localStorage.removeItem("voryn:token");
-            localStorage.removeItem("voryn:user");
-            window.dispatchEvent(new Event("voryn:auth"));
-            return { user: null };
-          })
-          .finally(() => {
-            globalInitialized = true;
-          });
-      }
-      globalInitializingPromise.finally(() => {
-        setInitialized(true);
-      });
-    } else {
-      globalInitialized = true;
-      setInitialized(true);
-    }
-  }, []);
-
-  const setAuth = (nextToken: string, nextUser: User) => {
-    localStorage.setItem("voryn:token", nextToken);
-    localStorage.setItem("voryn:user", JSON.stringify(nextUser));
-    setToken(nextToken);
+  const setAuth = (_nextToken: string, nextUser: User) => {
     setUser(nextUser);
-    window.dispatchEvent(new Event("voryn:auth"));
   };
 
   const logout = () => {
-    localStorage.removeItem("voryn:token");
-    localStorage.removeItem("voryn:user");
-    setToken("");
     setUser(null);
-    window.dispatchEvent(new Event("voryn:auth"));
+    void logoutSession();
   };
 
-  return { token, user, setAuth, logout, initialized };
+  return { token: user ? "cookie-session" : "", user, setAuth, logout, initialized };
 }
 
-function money(value: number) {
+function money(value: number | null) {
+  if (value === null) return "Not configured";
   return new Intl.NumberFormat("en", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
 }
 
@@ -925,6 +867,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
   const [isRegistered, setIsRegistered] = useState(data.isRegistered ?? false);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
   const auth = useAuthSession();
+  const navigate = useNavigate();
   const canUseAttendeeActions = Boolean(auth.user && auth.token && auth.user.role !== "admin");
   const shownEvent = liveEvent.slug === event.slug ? liveEvent : event;
   const isCancelled = event.status === "cancelled";
@@ -981,9 +924,8 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
                     setTicketAction("Registered with reminders");
                   }
                 } else {
-                  const result = await reserveEvent(shownEvent.slug);
-                  setLiveEvent(result.event);
-                  setTicketAction(result.action === "waitlist-joined" ? "Waitlist joined" : "Spot reserved");
+                  setTicketAction("Sign in to register for this event");
+                  navigate("/login");
                 }
               }}
             >
@@ -1232,8 +1174,8 @@ function AuthPage({
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [role, setRole] = useState<Exclude<Role, "guest">>(adminOnly ? "admin" : defaultRole === "admin" ? "participant" : defaultRole);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(adminOnly ? "admin@voryn.test" : defaultRole === "organizer" ? "organizer@voryn.test" : "participant@voryn.test");
-  const [password, setPassword] = useState("password");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
 
   const submit = async (event: React.FormEvent) => {
@@ -1245,10 +1187,8 @@ function AuthPage({
           ? adminOnly
             ? await adminLogin({ email, password })
             : await login({ email, password })
-          : adminOnly
-            ? await adminSignup({ name: name || email.split("@")[0], email, password })
-            : await signup({ name: name || email.split("@")[0], email, password, role });
-      auth.setAuth(result.token, result.user);
+          : await signup({ name: name || email.split("@")[0], email, password, role });
+      auth.setAuth("cookie-session", result.user);
       navigate(dashboardPath(result.user), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
@@ -1276,9 +1216,7 @@ function AuthPage({
             <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
               Log in
             </button>
-            <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>
-              Sign up
-            </button>
+            {!adminOnly ? <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Sign up</button> : null}
           </div>
           {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /> : null}
           <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
@@ -1293,11 +1231,47 @@ function AuthPage({
           <button className="solid-dark" type="submit">
             <Shield size={18} /> {mode === "login" ? "Log in" : "Create account"}
           </button>
-          <small>{adminOnly ? "Admin login: admin@voryn.test / password." : "User logins: attendee demo participant@voryn.test or organizer@voryn.test / password."}</small>
+          {mode === "login" && !adminOnly ? <Link to="/forgot-password">Forgot password?</Link> : null}
+          <small>{adminOnly ? "Administrator accounts are provisioned securely by an operator." : "Use your Voryn account credentials."}</small>
         </form>
       </section>
     </main>
   );
+}
+
+function PasswordResetPage() {
+  const [params] = useSearchParams();
+  const token = params.get("token") ?? "";
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    try {
+      if (token) {
+        await confirmPasswordReset(token, password);
+        setMessage("Password updated. You can now sign in.");
+      } else {
+        const result = await requestPasswordReset(email);
+        setMessage(result.message);
+      }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Request failed"); }
+    finally { setBusy(false); }
+  };
+  return <main><BrandNav /><section className="portal-hero auth-hero"><div><p className="eyebrow">Account recovery</p><h1>{token ? "Choose a new password." : "Reset your password."}</h1></div><form className="portal-card auth-card" onSubmit={submit}>{token ? <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="New strong password" /> : <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />}{message ? <small>{message}</small> : null}<button className="solid-dark" disabled={busy} type="submit">{busy ? "Working…" : token ? "Reset password" : "Send reset instructions"}</button></form></section></main>;
+}
+
+function ChangePasswordPage() {
+  const auth = useAuthSession();
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [message, setMessage] = useState("");
+  if (!auth.initialized) return <LoadingScreen />;
+  if (!auth.user) return <main><BrandNav /><ErrorState message="Sign in before changing your password." /></main>;
+  return <main><BrandNav /><section className="portal-hero auth-hero"><div><p className="eyebrow">Account security</p><h1>Change your password.</h1></div><form className="portal-card auth-card" onSubmit={async (event) => { event.preventDefault(); setMessage(""); try { await changePassword(currentPassword, newPassword); setCurrentPassword(""); setNewPassword(""); setMessage("Password changed and other sessions revoked."); } catch (error) { setMessage(error instanceof Error ? error.message : "Password change failed"); } }}><input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} placeholder="Current password" /><input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="New strong password" />{message ? <small>{message}</small> : null}<button className="solid-dark" type="submit">Change password</button></form></section></main>;
 }
 
 function DashboardNav({
@@ -1330,6 +1304,7 @@ function DashboardNav({
           <div className="user-avatar-fallback">{user.name.charAt(0).toUpperCase()}</div>
         )}
         <span>{role === "participant" ? "attendee" : role}</span>
+        <Link to="/change-password">Security</Link>
         <button onClick={logout}>
           <LogOut size={17} /> Log out
         </button>
@@ -1394,6 +1369,7 @@ function OrganizerDashboardPage() {
 
 function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
   const [tab, setTab] = useState("Overview");
+  const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [draft, setDraft] = useState({
     title: "New Voryn Event",
@@ -1434,9 +1410,11 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
 
-  const createEvent = async (event: React.FormEvent) => {
+  const saveEvent = async (event: React.FormEvent) => {
     event.preventDefault();
-    const result = await createOrganizerEvent(token, draft);
+    if (editingSlug) await updateOrganizerEvent(token, editingSlug, draft);
+    else await createOrganizerEvent(token, draft);
+    setEditingSlug(null);
     setRefreshKey((value) => value + 1);
     setTab("My Events");
   };
@@ -1508,8 +1486,14 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
                   <span>{event.attendeeCount.toLocaleString()} attendees</span>
                   <button
                     onClick={async () => {
-                      await updateOrganizerEvent(token, event.slug, { status: event.status === "published" ? "sold-out" : "published" });
-                      setRefreshKey((value) => value + 1);
+                      setDraft({
+                        title: event.title, citySlug: event.citySlug, category: event.category, status: event.status,
+                        startsAt: event.startsAt, venue: event.venue, priceLabel: event.priceLabel, summary: event.summary,
+                        coverImage: event.media.coverImage, heroImage: event.media.heroImage, thumbnail: event.media.thumbnail,
+                        gallery: event.media.gallery ?? []
+                      });
+                      setEditingSlug(event.slug);
+                      setTab("Create Event");
                     }}
                   >
                     <Edit3 size={16} />
@@ -1529,7 +1513,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
         ) : null}
 
         {tab === "Create Event" ? (
-          <form className="portal-card form-grid" onSubmit={createEvent}>
+          <form className="portal-card form-grid" onSubmit={saveEvent}>
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Title" />
             <select value={draft.citySlug} onChange={(event) => setDraft({ ...draft, citySlug: event.target.value })}>
               <option value="lagos">Lagos</option>
@@ -1624,7 +1608,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
 
             <textarea value={draft.summary} onChange={(event) => setDraft({ ...draft, summary: event.target.value })} />
             <button className="solid-dark" type="submit">
-              <Plus size={18} /> Create event
+              {editingSlug ? <Edit3 size={18} /> : <Plus size={18} />} {editingSlug ? "Save event changes" : "Create event"}
             </button>
           </form>
         ) : null}
@@ -1635,14 +1619,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
               <div className="analytics-summary-card">
                 <h3>Overall Conversion</h3>
                 <div className="metric-value">
-                  {data.analytics.length > 0
-                    ? Math.round(
-                        (data.analytics.reduce((sum, item) => sum + item.conversionRate, 0) /
-                          data.analytics.length) *
-                          100
-                      )
-                    : 0}
-                  %
+                  Not configured
                 </div>
                 <p>Average registration success</p>
               </div>
@@ -1656,7 +1633,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
               <div className="analytics-summary-card">
                 <h3>Ticket Revenue</h3>
                 <div className="metric-value">
-                  {money(data.analytics.reduce((sum, item) => sum + item.revenue, 0))}
+                  {money(null)}
                 </div>
                 <p>Direct ticket sales</p>
               </div>
@@ -1689,10 +1666,10 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
                   <div className="analytics-conversion">
                     <div className="conversion-header">
                       <span>Conversion Rate</span>
-                      <strong>{Math.round(item.conversionRate * 100)}%</strong>
+                      <strong>{item.conversionRate === null ? "N/A" : `${Math.round(item.conversionRate * 100)}%`}</strong>
                     </div>
                     <div className="progress-bar-bg">
-                      <div className="progress-bar-fill" style={{ width: `${Math.round(item.conversionRate * 100)}%` }} />
+                      <div className="progress-bar-fill" style={{ width: `${item.conversionRate === null ? 0 : Math.round(item.conversionRate * 100)}%` }} />
                     </div>
                   </div>
                 </div>
@@ -2062,6 +2039,9 @@ function App() {
       <Route path="/search" element={<SearchPage />} />
       <Route path="/login" element={<AuthPage />} />
       <Route path="/signup" element={<AuthPage />} />
+      <Route path="/forgot-password" element={<PasswordResetPage />} />
+      <Route path="/reset-password" element={<PasswordResetPage />} />
+      <Route path="/change-password" element={<ChangePasswordPage />} />
       <Route path="/attendee" element={<ParticipantDashboardPage />} />
       <Route path="/participant" element={<ParticipantDashboardPage />} />
       <Route path="/organizer" element={<OrganizerDashboardPage />} />

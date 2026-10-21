@@ -21,12 +21,23 @@ const API_BASE = rawApiBase.replace(/\/+$/, "");
 
 type RequestOptions = RequestInit & { token?: string | null };
 
+let csrfToken = "";
+
+async function ensureCsrfToken() {
+  if (csrfToken) return csrfToken;
+  const response = await fetch(`${API_BASE}/api/auth/csrf`, { credentials: "include" });
+  if (!response.ok) throw new Error("Unable to initialize a secure session");
+  const data = await response.json() as { csrfToken: string };
+  csrfToken = data.csrfToken;
+  return csrfToken;
+}
+
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const headers = new Headers(options.headers);
   if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-  if (options.token) headers.set("Authorization", `Bearer ${options.token}`);
+  if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) headers.set("X-CSRF-Token", await ensureCsrfToken());
 
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
   if (!response.ok) {
     let errorMessage = `Request failed: ${response.status}`;
     const contentType = response.headers.get("Content-Type") ?? "";
@@ -47,13 +58,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     }
     throw new Error(errorMessage);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 
 async function textRequest(path: string, options: RequestOptions = {}) {
   const headers = new Headers(options.headers);
-  if (options.token) headers.set("Authorization", `Bearer ${options.token}`);
-  const response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (options.method && !["GET", "HEAD"].includes(options.method.toUpperCase())) headers.set("X-CSRF-Token", await ensureCsrfToken());
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, credentials: "include" });
   if (!response.ok) {
     let errorMessage = `Request failed: ${response.status}`;
     const contentType = response.headers.get("Content-Type") ?? "";
@@ -108,9 +120,7 @@ export function getEvent(slug: string, token?: string) {
 }
 
 export async function reserveEvent(slug: string) {
-  const response = await fetch(`${API_BASE}/api/events/${slug}/rsvp`, { method: "POST" });
-  if (!response.ok) throw new Error(`Reservation failed: ${response.status}`);
-  return response.json() as Promise<{ event: Event; action: "reserved" | "waitlist-joined" }>;
+  return request<{ action: "reserved"; registration: unknown }>(`/api/events/${slug}/rsvp`, { method: "POST" });
 }
 
 export function getCity(slug: string) {
@@ -122,9 +132,7 @@ export function getOrganizer(slug: string) {
 }
 
 export async function followOrganizer(slug: string) {
-  const response = await fetch(`${API_BASE}/api/organizers/${slug}/follow`, { method: "POST" });
-  if (!response.ok) throw new Error(`Follow failed: ${response.status}`);
-  return response.json() as Promise<{ organizer: Organizer; action: "followed" }>;
+  return request<{ organizer: Organizer; action: "followed" }>(`/api/organizers/${slug}/follow`, { method: "POST" });
 }
 
 export function searchEvents(query: string, mode?: DiscoveryMode, options: HomeOptions = {}) {
@@ -140,35 +148,47 @@ export function getCities() {
 }
 
 export function signup(input: { name: string; email: string; password: string; role: Exclude<Role, "guest"> }) {
-  return request<{ token: string; user: User }>("/api/auth/signup", {
+  return request<{ user: User }>("/api/auth/signup", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
 export function login(input: { email: string; password: string }) {
-  return request<{ token: string; user: User }>("/api/auth/login", {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-}
-
-export function adminSignup(input: { name: string; email: string; password: string }) {
-  return request<{ token: string; user: User }>("/api/admin/auth/signup", {
+  return request<{ user: User }>("/api/auth/login", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
 export function adminLogin(input: { email: string; password: string }) {
-  return request<{ token: string; user: User }>("/api/admin/auth/login", {
+  return request<{ user: User }>("/api/admin/auth/login", {
     method: "POST",
     body: JSON.stringify(input)
   });
 }
 
-export function getMe(token: string) {
-  return request<{ user: User | null }>("/api/auth/me", { token });
+export function getMe(_token?: string) {
+  return request<{ user: User | null }>("/api/auth/me");
+}
+
+export async function logoutSession() {
+  await request<never>("/api/auth/logout", { method: "POST" }).catch((error) => {
+    if (!(error instanceof SyntaxError)) throw error;
+  });
+  csrfToken = "";
+}
+
+export function requestPasswordReset(email: string) {
+  return request<{ message: string }>("/api/auth/password-reset/request", { method: "POST", body: JSON.stringify({ email }) });
+}
+
+export function confirmPasswordReset(token: string, password: string) {
+  return request<{ success: true }>("/api/auth/password-reset/confirm", { method: "POST", body: JSON.stringify({ token, password }) });
+}
+
+export function changePassword(currentPassword: string, newPassword: string) {
+  return request<{ success: true }>("/api/auth/password/change", { method: "POST", body: JSON.stringify({ currentPassword, newPassword }) });
 }
 
 export function switchDashboard(token: string, dashboard: User["lastDashboard"]) {

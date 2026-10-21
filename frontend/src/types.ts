@@ -155,10 +155,10 @@ export type OrganizerDashboard = {
   user: User;
   organizer: Organizer;
   events: Event[];
-  overview: { events: number; attendees: number; registrations: number; ticketSales: number; revenue: number };
-  analytics: { eventSlug: string; title: string; attendeeCount: number; rsvpCount: number; ticketSalesCount: number; revenue: number; conversionRate: number }[];
+  overview: { events: number; attendees: number; registrations: number; ticketSales: number; revenue: number | null };
+  analytics: { eventSlug: string; title: string; attendeeCount: number; rsvpCount: number; ticketSalesCount: number; revenue: number | null; conversionRate: number | null }[];
   attendees: (Registration & { user: User })[];
-  revenue: { total: number; byEvent: { eventSlug: string; title: string; revenue: number }[] };
+  revenue: { total: number | null; byEvent: { eventSlug: string; title: string; revenue: number | null }[] };
   announcements: { id: string; eventSlug: string; subject: string; message: string; sentAt: string }[];
 };
 
@@ -168,7 +168,7 @@ export type AdminDashboard = {
   events: Event[];
   registrations: Registration[];
   reports: { id: string; eventSlug: string; rating: number; comment: string; createdAt: string }[];
-  analytics: { users: number; organizers: number; events: number; registrations: number; revenue: number };
+  analytics: { users: number; organizers: number; events: number; registrations: number; revenue: number | null };
 };
 
 export type CalendarLinks = {
