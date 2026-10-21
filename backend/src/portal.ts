@@ -1,893 +1,383 @@
-import type { Request, Response } from "express";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { addEventToStore, cities, organizers, publicEvents, removeEventFromStore, syncPublicEvents, updateEventVisibility, events as allEvents } from "./data.js";
+import type { Express, Request } from "express";
+import type { Event as DbEvent, Organizer, Prisma, Registration, User } from "@prisma/client";
+import { addEventToStore, cities, events as cachedEvents, organizers as cachedOrganizers, publicEvents, removeEventFromStore, updateEventVisibility } from "./data.js";
+import type { Event, EventStatus } from "./domain.js";
 import { prisma } from "./db.js";
-import type { Event, EventStatus, Interest } from "./domain.js";
-import { interests } from "./personalization.js";
+import { asyncHandler, HttpError } from "./http.js";
+import { createOpaqueToken, createTicketCode, hashPassword, hashToken, isPasswordHash, normalizeEmail, validatePassword, verifyPassword } from "./security.js";
 import { uniqueSlug } from "./slug.js";
+import { announcementSchema, changePasswordSchema, dashboardSchema, eventCreateSchema, eventUpdateSchema, loginSchema, organizerProfileSchema, profileSchema, resetConfirmSchema, resetRequestSchema, reviewSchema, signupSchema } from "./validation.js";
+import { createSession, currentUser, requireAdmin, requireAuth, requireEventOwnership, requireOrganizationPermission, requireOrganizer, requireParticipantAccess, revokeSession, safeUser } from "./auth.js";
 
-export type Role = "guest" | "participant" | "organizer" | "admin";
+type Reminder = { channel: "email" | "push" | "sms"; offset: "7 days before" | "1 day before" | "1 hour before" | "Event start time"; scheduledAt: string; status: "scheduled" | "ready" };
 
-type User = {
-  id: string;
-  name: string;
-  email: string;
-  password: string;
-  role: Exclude<Role, "guest">;
-  lastDashboard: "participant" | "organizer" | "admin";
-  organizerSlug?: string;
-  favorites: string[];
-  following: string[];
-  notifications: {
-    email: boolean;
-    push: boolean;
-    smsReady: boolean;
+function domainEvent(event: DbEvent): Event {
+  return {
+    id: event.id, title: event.title, slug: event.slug, summary: event.summary,
+    category: event.category as Event["category"], type: event.type as Event["type"], mode: event.mode as Event["mode"],
+    status: event.status as Event["status"], startsAt: event.startsAt, venue: event.venue, citySlug: event.citySlug,
+    country: event.country, organizerSlug: event.organizerSlug, media: event.media as Event["media"],
+    attendeeCount: event.attendeeCount, rsvpCount: event.rsvpCount, ticketSalesCount: event.ticketSalesCount,
+    badges: event.badges as Event["badges"], priceLabel: event.priceLabel
   };
-  profileImage?: string;
-};
-
-type Registration = {
-  id: string;
-  userId: string;
-  eventSlug: string;
-  registeredAt: string;
-  checkedIn: boolean;
-  ticketCode: string;
-  reminders: Reminder[];
-};
-
-type Reminder = {
-  channel: "email" | "push" | "sms";
-  offset: "7 days before" | "1 day before" | "1 hour before" | "Event start time";
-  scheduledAt: string;
-  status: "scheduled" | "ready";
-};
-
-type Announcement = {
-  id: string;
-  organizerSlug: string;
-  eventSlug: string;
-  subject: string;
-  message: string;
-  sentAt: string;
-};
-
-type Review = {
-  id: string;
-  userId: string;
-  eventSlug: string;
-  rating: number;
-  comment: string;
-  createdAt: string;
-};
-
-export const sessions = new Map<string, string>();
-export const registrations: Registration[] = [];
-export const announcements: Announcement[] = [];
-export const reviews: Review[] = [];
-
-export const users: User[] = [
-  {
-    id: "user_participant_demo",
-    name: "Demo Participant",
-    email: "participant@voryn.test",
-    password: "password",
-    role: "participant",
-    lastDashboard: "participant",
-    favorites: ["lagos-tech-meetup-2026"],
-    following: ["startup-lagos"],
-    notifications: { email: true, push: true, smsReady: false },
-    profileImage: ""
-  },
-  {
-    id: "user_organizer_demo",
-    name: "Startup Lagos Admin",
-    email: "organizer@voryn.test",
-    password: "password",
-    role: "organizer",
-    lastDashboard: "organizer",
-    organizerSlug: "startup-lagos",
-    favorites: [],
-    following: [],
-    notifications: { email: true, push: true, smsReady: true },
-    profileImage: ""
-  },
-  {
-    id: "user_admin_demo",
-    name: "Platform Admin",
-    email: "admin@voryn.test",
-    password: "password",
-    role: "admin",
-    lastDashboard: "admin",
-    favorites: [],
-    following: [],
-    notifications: { email: true, push: true, smsReady: true },
-    profileImage: ""
-  }
-];
-
-const storePath = join(process.cwd(), "portal-store.json");
-
-function persistPortalState() {
-  const payload = {
-    users,
-    registrations,
-    announcements,
-    reviews,
-    sessions: [...sessions.entries()],
-    organizers,
-    events: allEvents
-  };
-  mkdirSync(dirname(storePath), { recursive: true });
-  writeFileSync(storePath, JSON.stringify(payload, null, 2));
 }
 
-function loadPortalState() {
-  if (!existsSync(storePath)) return;
-  try {
-    const payload = JSON.parse(readFileSync(storePath, "utf8")) as {
-      users?: User[];
-      registrations?: Registration[];
-      announcements?: Announcement[];
-      reviews?: Review[];
-      sessions?: [string, string][];
-      organizers?: typeof organizers;
-      events?: typeof allEvents;
-      publicEvents?: typeof publicEvents;
-    };
-    if (payload.users?.length) {
-      users.length = 0;
-      users.push(...payload.users);
-    }
-    if (payload.registrations) {
-      registrations.length = 0;
-      registrations.push(...payload.registrations);
-    }
-    if (payload.announcements) {
-      announcements.length = 0;
-      announcements.push(...payload.announcements);
-    }
-    if (payload.reviews) {
-      reviews.length = 0;
-      reviews.push(...payload.reviews);
-    }
-    if (payload.sessions) {
-      sessions.clear();
-      for (const [token, userId] of payload.sessions) sessions.set(token, userId);
-    }
-    if (payload.organizers?.length) {
-      organizers.length = 0;
-      organizers.push(...payload.organizers);
-    }
-    if (payload.events?.length) {
-      allEvents.length = 0;
-      allEvents.push(...payload.events);
-      syncPublicEvents();
-    } else if (payload.publicEvents?.length) {
-      allEvents.length = 0;
-      allEvents.push(...payload.publicEvents);
-      syncPublicEvents();
-    }
-  } catch (error) {
-    console.error("Failed to load portal store:", error);
-  }
+async function organizerFor(user: User): Promise<Organizer> {
+  if (user.role !== "organizer" || !user.organizerSlug) throw new HttpError(403, "Organizer membership required");
+  const organizer = await prisma.organizer.findUnique({ where: { slug: user.organizerSlug } });
+  if (!organizer) throw new HttpError(409, "Organizer profile is missing. Contact support.");
+  return organizer;
 }
 
-loadPortalState();
-
-function safeUser(user: User) {
-  const { password: _password, ...safe } = user;
-  return safe;
+function registrationReminders(event: DbEvent, user: User): Reminder[] {
+  const preferences = user.notifications as { email?: boolean; push?: boolean; smsReady?: boolean };
+  const offsets: Array<[Reminder["offset"], number]> = [["7 days before", 604800000], ["1 day before", 86400000], ["1 hour before", 3600000], ["Event start time", 0]];
+  const channels: Reminder["channel"][] = [];
+  if (preferences.email) channels.push("email");
+  if (preferences.push) channels.push("push");
+  if (preferences.smsReady) channels.push("sms");
+  return offsets.flatMap(([offset, milliseconds]) => channels.map((channel) => ({ channel, offset, scheduledAt: new Date(new Date(event.startsAt).getTime() - milliseconds).toISOString(), status: "scheduled" })));
 }
 
-function createToken(userId: string) {
-  const token = `tok_${userId}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  sessions.set(token, userId);
-  persistPortalState();
-  prisma.session.create({ data: { token, userId } }).catch((err) => console.error("Failed to save session:", err));
-  return token;
-}
-
-export function currentUser(request: Request) {
-  const header = request.header("authorization");
-  const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
-  const userId = token ? sessions.get(token) : undefined;
-  return userId ? users.find((user) => user.id === userId) : undefined;
-}
-
-function requireRole(request: Request, response: Response, roles: Role[]) {
-  const user = currentUser(request);
-  if (!user) {
-    response.status(401).json({ error: "Authentication required" });
-    return undefined;
-  }
-  const isMemberPortal =
-    (roles.includes("participant") || roles.includes("organizer")) &&
-    (user.role === "participant" || user.role === "organizer");
-  if (!roles.includes(user.role) && user.role !== "admin" && !isMemberPortal) {
-    response.status(403).json({ error: "Role not allowed" });
-    return undefined;
-  }
-  return user;
-}
-
-function organizerFor(user: User) {
-  if (user.role === "admin") return organizers[0];
-  if (!user.organizerSlug) {
-    const slug = uniqueSlug(user.name, new Set(organizers.map((organizer) => organizer.slug)));
-    organizers.push({
-      id: `org_${slug}`,
-      name: user.name,
-      slug,
-      profileImage: "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=700&q=80",
-      coverImage: "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=1800&q=80",
-      bio: "Organizer on Voryn.",
-      website: "https://voryn.example",
-      socials: {},
-      followers: 0,
-      totalAttendeesHosted: 0
-    });
-    user.organizerSlug = slug;
-    persistPortalState();
-  }
-  return organizers.find((organizer) => organizer.slug === user.organizerSlug) ?? organizers[0];
-}
-
-function eventRevenue(event: Event) {
-  const numeric = Number(event.priceLabel.replace(/[^\d.]/g, ""));
-  const price = Number.isFinite(numeric) ? numeric : 0;
-  return event.priceLabel.toLowerCase().includes("free") || event.priceLabel.toLowerCase().includes("sold")
-    ? 0
-    : Math.round(price * event.ticketSalesCount);
-}
-
-function registrationReminders(event: Event, user: User): Reminder[] {
-  const start = new Date(event.startsAt).getTime();
-  const offsets: [Reminder["offset"], number][] = [
-    ["7 days before", 7 * 24 * 60 * 60 * 1000],
-    ["1 day before", 24 * 60 * 60 * 1000],
-    ["1 hour before", 60 * 60 * 1000],
-    ["Event start time", 0]
-  ];
-  const channels: Reminder["channel"][] = [
-    ...(user.notifications.email ? (["email"] as const) : []),
-    ...(user.notifications.push ? (["push"] as const) : []),
-    ...(user.notifications.smsReady ? (["sms"] as const) : [])
-  ];
-  return offsets.flatMap(([offset, ms]) =>
-    channels.map((channel) => ({
-      channel,
-      offset,
-      scheduledAt: new Date(start - ms).toISOString(),
-      status: "scheduled" as const
-    }))
-  );
+function eventCalendarLinks(request: Request, event: { slug: string; title: string; summary: string; venue: string; startsAt: string }) {
+  const origin = `${request.protocol}://${request.get("host")}`;
+  const start = new Date(event.startsAt);
+  const end = new Date(start.getTime() + 7200000);
+  const format = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const google = new URLSearchParams({ action: "TEMPLATE", text: event.title, details: event.summary, location: event.venue, dates: `${format(start)}/${format(end)}` });
+  const outlook = new URLSearchParams({ subject: event.title, body: event.summary, location: event.venue, startdt: start.toISOString(), enddt: end.toISOString() });
+  return { google: `https://calendar.google.com/calendar/render?${google}`, outlook: `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&${outlook}`, apple: `${origin}/api/calendar/${event.slug}.ics` };
 }
 
 function buildIcs(event: Event) {
   const start = new Date(event.startsAt);
-  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
+  const end = new Date(start.getTime() + 7200000);
   const stamp = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  return [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Voryn//Events//EN",
-    "BEGIN:VEVENT",
-    `UID:${event.slug}@voryn.local`,
-    `DTSTAMP:${stamp(new Date())}`,
-    `DTSTART:${stamp(start)}`,
-    `DTEND:${stamp(end)}`,
-    `SUMMARY:${event.title}`,
-    `DESCRIPTION:${event.summary}`,
-    `LOCATION:${event.venue}`,
-    "BEGIN:VALARM",
-    "TRIGGER:-PT1H",
-    "ACTION:DISPLAY",
-    `DESCRIPTION:${event.title} starts in 1 hour`,
-    "END:VALARM",
-    "END:VEVENT",
-    "END:VCALENDAR"
-  ].join("\r\n");
+  const clean = (value: string) => value.replace(/[\r\n]/g, " ").replace(/[,;]/g, "\\$&");
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Voryn//Events//EN", "BEGIN:VEVENT", `UID:${event.id}@voryn`, `DTSTAMP:${stamp(new Date())}`, `DTSTART:${stamp(start)}`, `DTEND:${stamp(end)}`, `SUMMARY:${clean(event.title)}`, `DESCRIPTION:${clean(event.summary)}`, `LOCATION:${clean(event.venue)}`, "END:VEVENT", "END:VCALENDAR"].join("\r\n");
 }
 
-function eventCalendarLinks(request: Request, event: Event) {
-  const origin = `${request.protocol}://${request.get("host")}`;
-  const start = new Date(event.startsAt);
-  const end = new Date(start.getTime() + 2 * 60 * 60 * 1000);
-  const format = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-  const params = new URLSearchParams({
-    action: "TEMPLATE",
-    text: event.title,
-    details: event.summary,
-    location: event.venue,
-    dates: `${format(start)}/${format(end)}`
-  });
-  const outlookParams = new URLSearchParams({
-    subject: event.title,
-    body: event.summary,
-    location: event.venue,
-    startdt: start.toISOString(),
-    enddt: end.toISOString()
-  });
-  return {
-    google: `https://calendar.google.com/calendar/render?${params.toString()}`,
-    outlook: `https://outlook.live.com/calendar/0/deeplink/compose?path=/calendar/action/compose&rru=addevent&${outlookParams.toString()}`,
-    apple: `${origin}/api/calendar/${event.slug}.ics`
-  };
-}
-
-function participantModel(user: User, request: Request) {
-  const myRegistrations = registrations.filter((item) => item.userId === user.id);
+async function participantModel(user: User, request: Request) {
+  const registrations = await prisma.registration.findMany({ where: { userId: user.id, status: "active" } });
+  const eventSlugs = registrations.map((item) => item.eventSlug);
+  const [registeredEvents, favorites, following, reviews] = await Promise.all([
+    prisma.event.findMany({ where: { slug: { in: eventSlugs }, deletedAt: null } }),
+    prisma.event.findMany({ where: { slug: { in: user.favorites }, deletedAt: null } }),
+    prisma.organizer.findMany({ where: { slug: { in: user.following } } }),
+    prisma.review.findMany({ where: { userId: user.id } })
+  ]);
   const now = Date.now();
-  const registeredEvents = myRegistrations
-    .map((registration) => publicEvents.find((event) => event.slug === registration.eventSlug))
-    .filter((event): event is Event => Boolean(event));
+  const history = registeredEvents.map(domainEvent);
   return {
-    user: safeUser(user),
-    favorites: user.favorites.map((slug) => publicEvents.find((event) => event.slug === slug)).filter(Boolean),
-    following: user.following.map((slug) => organizers.find((organizer) => organizer.slug === slug)).filter(Boolean),
-    registrations: myRegistrations,
-    upcoming: registeredEvents.filter((event) => new Date(event.startsAt).getTime() >= now),
-    past: registeredEvents.filter((event) => new Date(event.startsAt).getTime() < now || event.status === "completed"),
-    history: registeredEvents,
-    reminders: myRegistrations.flatMap((registration) => registration.reminders),
-    reviews: reviews.filter((review) => review.userId === user.id),
-    calendar: Object.fromEntries(registeredEvents.map((event) => [event.slug, eventCalendarLinks(request, event)]))
+    user: safeUser(user), favorites: favorites.map(domainEvent), following, registrations,
+    upcoming: history.filter((event) => new Date(event.startsAt).getTime() >= now && event.status !== "cancelled"),
+    past: history.filter((event) => new Date(event.startsAt).getTime() < now || event.status === "completed"),
+    history, reminders: registrations.flatMap((registration) => registration.reminders as Reminder[]), reviews,
+    calendar: Object.fromEntries(history.map((event) => [event.slug, eventCalendarLinks(request, event)]))
   };
 }
 
-function organizerModel(user: User) {
-  const organizer = organizerFor(user);
-  const events = allEvents.filter((event) => event.organizerSlug === organizer.slug);
-  const organizerRegistrations = registrations.filter((registration) =>
-    events.some((event) => event.slug === registration.eventSlug)
-  );
-  const revenue = events.reduce((total, event) => total + eventRevenue(event), 0);
+async function organizerModel(user: User) {
+  const organizer = await organizerFor(user);
+  const dbEvents = await prisma.event.findMany({ where: { organizerSlug: organizer.slug, deletedAt: null } });
+  const eventSlugs = dbEvents.map((event) => event.slug);
+  const [registrations, announcements] = await Promise.all([
+    prisma.registration.findMany({ where: { eventSlug: { in: eventSlugs }, status: "active" } }),
+    prisma.announcement.findMany({ where: { organizerSlug: organizer.slug } })
+  ]);
+  const users = await prisma.user.findMany({ where: { id: { in: registrations.map((registration) => registration.userId) } } });
+  const userById = new Map(users.map((attendee) => [attendee.id, attendee]));
+  const eventList = dbEvents.map(domainEvent);
   return {
-    user: safeUser(user),
-    organizer,
-    events,
-    overview: {
-      events: events.length,
-      attendees: events.reduce((total, event) => total + event.attendeeCount, 0),
-      registrations: organizerRegistrations.length,
-      ticketSales: events.reduce((total, event) => total + event.ticketSalesCount, 0),
-      revenue
-    },
-    analytics: events.map((event) => ({
-      eventSlug: event.slug,
-      title: event.title,
-      attendeeCount: event.attendeeCount,
-      rsvpCount: event.rsvpCount,
-      ticketSalesCount: event.ticketSalesCount,
-      revenue: eventRevenue(event),
-      conversionRate: event.rsvpCount ? Number((event.ticketSalesCount / event.rsvpCount).toFixed(2)) : 0
-    })),
-    attendees: organizerRegistrations.map((registration) => ({
-      ...registration,
-      user: safeUser(users.find((item) => item.id === registration.userId)!)
-    })),
-    revenue: {
-      total: revenue,
-      byEvent: events.map((event) => ({ eventSlug: event.slug, title: event.title, revenue: eventRevenue(event) }))
-    },
-    announcements: announcements.filter((announcement) => announcement.organizerSlug === organizer.slug)
+    user: safeUser(user), organizer, events: eventList,
+    overview: { events: eventList.length, attendees: eventList.reduce((sum, event) => sum + event.attendeeCount, 0), registrations: registrations.length, ticketSales: eventList.reduce((sum, event) => sum + event.ticketSalesCount, 0), revenue: null },
+    analytics: eventList.map((event) => ({ eventSlug: event.slug, title: event.title, attendeeCount: event.attendeeCount, rsvpCount: event.rsvpCount, ticketSalesCount: event.ticketSalesCount, revenue: null, conversionRate: null })),
+    attendees: registrations.flatMap((registration) => { const attendee = userById.get(registration.userId); return attendee ? [{ ...registration, user: safeUser(attendee) }] : []; }),
+    revenue: { total: null, byEvent: eventList.map((event) => ({ eventSlug: event.slug, title: event.title, revenue: null })) }, announcements
   };
 }
 
-function adminModel() {
-  return {
-    users: users.map(safeUser),
-    organizers,
-    events: allEvents,
-    registrations,
-    reports: reviews.filter((review) => review.rating <= 2),
-    analytics: {
-      users: users.length,
-      organizers: organizers.length,
-      events: allEvents.length,
-      registrations: registrations.length,
-      revenue: allEvents.reduce((total, event) => total + eventRevenue(event), 0)
+async function registerForEvent(user: User, slug: string) {
+  const existing = await prisma.registration.findUnique({ where: { userId_eventSlug: { userId: user.id, eventSlug: slug } } });
+  if (existing) throw new HttpError(409, existing.status === "active" ? "Already registered for this event" : "This registration was previously cancelled");
+  let event: DbEvent | null = null;
+  let reserved = false;
+  for (let attempt = 0; attempt < 5 && !reserved; attempt += 1) {
+    event = await prisma.event.findUnique({ where: { slug } });
+    if (!event || event.deletedAt) throw new HttpError(404, "Event not found");
+    if (event.status !== "published") throw new HttpError(409, "Event is not open for registration");
+    if (event.capacity !== null && event.reservedCount >= event.capacity) throw new HttpError(409, "Event capacity has been reached");
+    const result = await prisma.event.updateMany({ where: { id: event.id, status: "published", deletedAt: null, reservedCount: event.reservedCount }, data: { reservedCount: { increment: 1 }, rsvpCount: { increment: 1 } } });
+    reserved = result.count === 1;
+  }
+  if (!event || !reserved) throw new HttpError(409, "Registration capacity changed; please try again");
+  try {
+    const registration = await prisma.registration.create({ data: { userId: user.id, eventSlug: event.slug, registeredAt: new Date().toISOString(), checkedIn: false, ticketCode: createTicketCode(), reminders: registrationReminders(event, user) as unknown as Prisma.InputJsonValue, status: "active" } });
+    const cached = cachedEvents.find((item) => item.slug === slug);
+    if (cached) cached.rsvpCount += 1;
+    return registration;
+  } catch (error) {
+    await prisma.event.update({ where: { id: event.id }, data: { reservedCount: { decrement: 1 }, rsvpCount: { decrement: 1 } } }).catch(() => undefined);
+    if (error && typeof error === "object" && "code" in error && error.code === "P2002") throw new HttpError(409, "Already registered for this event");
+    throw error;
+  }
+}
+
+async function sendResetEmail(email: string, token: string) {
+  const endpoint = process.env.EMAIL_WEBHOOK_URL;
+  if (!endpoint) throw new HttpError(503, "Password reset email delivery is not configured");
+  const resetUrl = `${process.env.FRONTEND_URL ?? "http://localhost:5173"}/reset-password?token=${encodeURIComponent(token)}`;
+  const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", ...(process.env.EMAIL_WEBHOOK_TOKEN ? { Authorization: `Bearer ${process.env.EMAIL_WEBHOOK_TOKEN}` } : {}) }, body: JSON.stringify({ template: "password-reset", to: email, resetUrl }) });
+  if (!response.ok) throw new HttpError(503, "Password reset email delivery is temporarily unavailable");
+}
+
+export function registerPortalRoutes(app: Express) {
+  app.post("/api/auth/signup", asyncHandler(async (request, response) => {
+    const input = signupSchema.parse(request.body);
+    const passwordError = validatePassword(input.password);
+    if (passwordError) throw new HttpError(422, passwordError);
+    const email = normalizeEmail(input.email);
+    if (await prisma.user.findUnique({ where: { email } })) throw new HttpError(409, "An account with this email already exists");
+    let organizer: Organizer | undefined;
+    if (input.role === "organizer") {
+      const slugs = new Set((await prisma.organizer.findMany({ select: { slug: true } })).map(({ slug }) => slug));
+      organizer = await prisma.organizer.create({ data: { name: input.name, slug: uniqueSlug(input.name, slugs), profileImage: "", coverImage: "", bio: "", website: "", socials: {}, followers: 0, totalAttendeesHosted: 0 } });
     }
-  };
-}
-
-export function registerPortalRoutes(app: import("express").Express) {
-  app.post("/api/auth/signup", (request, response) => {
-    if (request.body.role === "admin") return response.status(401).json({ error: "Invalid email or password" });
-    const role = request.body.role === "organizer" ? "organizer" : "participant";
-    const email = String(request.body.email ?? "").trim().toLowerCase();
-    const name = String(request.body.name ?? "").trim();
-    const password = String(request.body.password ?? "");
-    if (!email || !name || password.length < 4) return response.status(400).json({ error: "Name, email, and password are required" });
-    if (users.some((user) => user.email === email)) return response.status(409).json({ error: "Email already exists" });
-
-    const organizerSlug = role === "organizer" ? uniqueSlug(name, new Set(organizers.map((organizer) => organizer.slug))) : undefined;
-    if (organizerSlug) {
-      const org = {
-        name,
-        slug: organizerSlug,
-        profileImage: "https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=700&q=80",
-        coverImage: "https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=1800&q=80",
-        bio: "New organizer on Voryn.",
-        website: "https://voryn.example",
-        socials: {},
-        followers: 0,
-        totalAttendeesHosted: 0
-      };
-      organizers.push(org as any);
-      persistPortalState();
-      prisma.organizer.create({ data: org }).catch((err) => console.error("Failed to save organizer:", err));
+    try {
+      const user = await prisma.user.create({ data: { name: input.name, email, passwordHash: await hashPassword(input.password), role: input.role, lastDashboard: input.role, organizerSlug: organizer?.slug, favorites: [], following: [], notifications: { email: true, push: true, smsReady: false } } });
+      await createSession(response, user.id);
+      if (organizer) cachedOrganizers.push({ ...organizer, socials: organizer.socials } as never);
+      response.status(201).json({ user: safeUser(user) });
+    } catch (error) {
+      if (organizer) await prisma.organizer.delete({ where: { id: organizer.id } }).catch(() => undefined);
+      throw error;
     }
+  }));
 
-    const user: User = {
-      id: `user_${Date.now()}`,
-      name,
-      email,
-      password,
-      role,
-      lastDashboard: role,
-      organizerSlug,
-      favorites: [],
-      following: [],
-      notifications: { email: true, push: true, smsReady: false }
-    };
-    users.push(user);
-    persistPortalState();
-    prisma.user.create({
-      data: {
-        name: user.name,
-        email: user.email,
-        password: user.password,
-        role: user.role,
-        lastDashboard: user.lastDashboard,
-        organizerSlug: user.organizerSlug,
-        favorites: user.favorites,
-        following: user.following,
-        notifications: user.notifications,
-      }
-    }).catch((err) => console.error("Failed to save user:", err));
-
-    response.json({ token: createToken(user.id), user: safeUser(user) });
-  });
-
-  app.post("/api/auth/login", (request, response) => {
-    const email = String(request.body.email ?? "").trim().toLowerCase();
-    const password = String(request.body.password ?? "");
-    const user = users.find((item) => item.email === email && item.password === password);
-    if (!user || user.role === "admin") return response.status(401).json({ error: "Invalid email or password" });
-    response.json({ token: createToken(user.id), user: safeUser(user) });
-  });
-
-  app.post("/api/admin/auth/signup", (request, response) => {
-    const email = String(request.body.email ?? "").trim().toLowerCase();
-    const name = String(request.body.name ?? "").trim();
-    const password = String(request.body.password ?? "");
-    if (!email || !name || password.length < 4) return response.status(400).json({ error: "Name, email, and password are required" });
-    if (users.some((user) => user.email === email)) return response.status(409).json({ error: "Email already exists" });
-    const user: User = {
-      id: `user_admin_${Date.now()}`,
-      name,
-      email,
-      password,
-      role: "admin",
-      lastDashboard: "admin",
-      favorites: [],
-      following: [],
-      notifications: { email: true, push: true, smsReady: true }
-    };
-    users.push(user);
-    persistPortalState();
-    prisma.user.create({
-      data: {
-        name: user.name,
-        email: user.email,
-        password: user.password,
-        role: user.role,
-        lastDashboard: user.lastDashboard,
-        organizerSlug: user.organizerSlug,
-        favorites: user.favorites,
-        following: user.following,
-        notifications: user.notifications
-      }
-    }).catch((err) => console.error("Failed to save admin user:", err));
-    response.json({ token: createToken(user.id), user: safeUser(user) });
-  });
-
-  app.post("/api/admin/auth/login", (request, response) => {
-    const email = String(request.body.email ?? "").trim().toLowerCase();
-    const password = String(request.body.password ?? "");
-    const user = users.find((item) => item.email === email && item.password === password && item.role === "admin");
-    if (!user) return response.status(401).json({ error: "Invalid email or password" });
-    response.json({ token: createToken(user.id), user: safeUser(user) });
-  });
-
-  app.get("/api/auth/me", (request, response) => {
-    const user = currentUser(request);
-    response.json({ user: user ? safeUser(user) : null });
-  });
-
-  app.post("/api/auth/switch-dashboard", (request, response) => {
-    const user = requireRole(request, response, ["participant", "organizer", "admin"]);
-    if (!user) return;
-    const dashboard = request.body.dashboard === "organizer" ? "organizer" : request.body.dashboard === "admin" ? "admin" : "participant";
-    if (dashboard === "admin" && user.role !== "admin") return response.status(403).json({ error: "Admin access required" });
-    if (dashboard === "organizer") organizerFor(user);
-    user.lastDashboard = dashboard;
-    persistPortalState();
-    prisma.user.update({
-      where: { email: user.email },
-      data: { lastDashboard: user.lastDashboard, organizerSlug: user.organizerSlug }
-    }).catch((err) => console.error("Failed to update dashboard preference:", err));
+  const login = asyncHandler(async (request, response) => {
+    const input = loginSchema.parse(request.body);
+    const user = await prisma.user.findUnique({ where: { email: normalizeEmail(input.email) } });
+    if (!user || !isPasswordHash(user.passwordHash) || !(await verifyPassword(input.password, user.passwordHash))) {
+      if (user && !isPasswordHash(user.passwordHash)) await prisma.user.update({ where: { id: user.id }, data: { passwordResetRequired: true } });
+      throw new HttpError(401, "Invalid email or password");
+    }
+    if (request.path.includes("/admin/") !== (user.role === "admin")) throw new HttpError(401, "Invalid email or password");
+    await revokeSession(request, response);
+    await createSession(response, user.id);
     response.json({ user: safeUser(user) });
   });
+  app.post("/api/auth/login", login);
+  app.post("/api/admin/auth/login", login);
+  app.post("/api/admin/auth/signup", (_request, response) => response.status(404).json({ error: "Route not found" }));
+  app.post("/api/auth/logout", asyncHandler(async (request, response) => { await revokeSession(request, response); response.status(204).send(); }));
+  app.get("/api/auth/me", asyncHandler(async (request, response) => { const user = await currentUser(request); response.json({ user: user ? safeUser(user) : null }); }));
 
-  app.get("/api/portal/participant", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    response.json(participantModel(user, request));
-  });
-
-  app.post("/api/portal/participant/favorites/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    if (!user.favorites.includes(request.params.slug)) {
-      user.favorites.push(request.params.slug);
-      persistPortalState();
-      prisma.user.update({
-        where: { email: user.email },
-        data: { favorites: user.favorites }
-      }).catch((err) => console.error("Failed to update favorites:", err));
+  app.post("/api/auth/password-reset/request", asyncHandler(async (request, response) => {
+    const { email: rawEmail } = resetRequestSchema.parse(request.body);
+    if (!process.env.EMAIL_WEBHOOK_URL) throw new HttpError(503, "Password reset email delivery is not configured");
+    const email = normalizeEmail(rawEmail);
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (user) {
+      const token = createOpaqueToken();
+      await prisma.passwordResetToken.create({ data: { tokenHash: hashToken(token), userId: user.id, expiresAt: new Date(Date.now() + 30 * 60 * 1000) } });
+      await sendResetEmail(email, token);
     }
-    response.json(participantModel(user, request));
-  });
+    response.status(202).json({ message: "If an eligible account exists, reset instructions will be delivered." });
+  }));
+  app.post("/api/auth/password-reset/confirm", asyncHandler(async (request, response) => {
+    const input = resetConfirmSchema.parse(request.body);
+    const passwordError = validatePassword(input.password);
+    if (passwordError) throw new HttpError(422, passwordError);
+    const record = await prisma.passwordResetToken.findUnique({ where: { tokenHash: hashToken(input.token) } });
+    if (!record || record.usedAt || record.expiresAt <= new Date()) throw new HttpError(400, "Reset token is invalid or expired");
+    const claimed = await prisma.passwordResetToken.updateMany({ where: { id: record.id, usedAt: null, expiresAt: { gt: new Date() } }, data: { usedAt: new Date() } });
+    if (claimed.count !== 1) throw new HttpError(400, "Reset token is invalid or expired");
+    await prisma.user.update({ where: { id: record.userId }, data: { passwordHash: await hashPassword(input.password), passwordResetRequired: false } });
+    await prisma.session.deleteMany({ where: { userId: record.userId } });
+    response.json({ success: true });
+  }));
+  app.post("/api/auth/password/change", requireAuth, asyncHandler(async (request, response) => {
+    const input = changePasswordSchema.parse(request.body);
+    const user = response.locals.user as User;
+    if (!(await verifyPassword(input.currentPassword, user.passwordHash))) throw new HttpError(401, "Invalid email or password");
+    const passwordError = validatePassword(input.newPassword);
+    if (passwordError) throw new HttpError(422, passwordError);
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(input.newPassword), passwordResetRequired: false } });
+    await prisma.session.deleteMany({ where: { userId: user.id } });
+    await createSession(response, user.id);
+    response.json({ success: true });
+  }));
 
-  app.delete("/api/portal/participant/favorites/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    user.favorites = user.favorites.filter((slug) => slug !== request.params.slug);
-    persistPortalState();
-    prisma.user.update({
-      where: { email: user.email },
-      data: { favorites: user.favorites }
-    }).catch((err) => console.error("Failed to delete favorite:", err));
-    response.json(participantModel(user, request));
-  });
+  app.post("/api/auth/switch-dashboard", requireAuth, asyncHandler(async (request, response) => {
+    const { dashboard } = dashboardSchema.parse(request.body);
+    const user = response.locals.user as User;
+    const allowed = user.role === "admin" ? ["admin"] : user.role === "organizer" ? ["participant", "organizer"] : ["participant"];
+    if (!allowed.includes(dashboard)) throw new HttpError(403, "Dashboard is not available for this account");
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { lastDashboard: dashboard } });
+    response.json({ user: safeUser(updated) });
+  }));
 
-  app.post("/api/portal/participant/register/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    const event = publicEvents.find((item) => item.slug === request.params.slug);
-    if (!event) return response.status(404).json({ error: "Event not found" });
-    let registration = registrations.find((item) => item.userId === user.id && item.eventSlug === event.slug);
-    if (!registration) {
-      registration = {
-        id: `reg_${Date.now()}_${Math.random().toString(36).slice(2)}`,
-        userId: user.id,
-        eventSlug: event.slug,
-        registeredAt: new Date().toISOString(),
-        checkedIn: false,
-        ticketCode: `VRY-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-        reminders: registrationReminders(event, user)
-      };
-      registrations.push(registration);
-      event.rsvpCount += 1;
-      event.attendeeCount += 1;
-      if (event.status !== "sold-out") event.ticketSalesCount += 1;
-
-      persistPortalState();
-      prisma.registration.create({ data: registration }).catch((err) => console.error("Failed to save registration:", err));
-      prisma.event.update({
-        where: { slug: event.slug },
-        data: {
-          rsvpCount: event.rsvpCount,
-          attendeeCount: event.attendeeCount,
-          ticketSalesCount: event.ticketSalesCount
-        }
-      }).catch((err) => console.error("Failed to update event registration counts:", err));
-    }
-    response.json({ registration, dashboard: participantModel(user, request) });
-  });
-
-  app.delete("/api/portal/participant/register/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    const event = publicEvents.find((item) => item.slug === request.params.slug);
-    if (!event) return response.status(404).json({ error: "Event not found" });
-    const regIndex = registrations.findIndex((item) => item.userId === user.id && item.eventSlug === event.slug);
-    if (regIndex !== -1) {
-      registrations.splice(regIndex, 1);
-      event.rsvpCount = Math.max(0, event.rsvpCount - 1);
-      event.attendeeCount = Math.max(0, event.attendeeCount - 1);
-      if (event.status !== "sold-out") event.ticketSalesCount = Math.max(0, event.ticketSalesCount - 1);
-
-      persistPortalState();
-      prisma.registration.deleteMany({
-        where: { userId: user.id, eventSlug: event.slug }
-      }).catch((err) => console.error("Failed to delete registration:", err));
-      prisma.event.update({
-        where: { slug: event.slug },
-        data: {
-          rsvpCount: event.rsvpCount,
-          attendeeCount: event.attendeeCount,
-          ticketSalesCount: event.ticketSalesCount
-        }
-      }).catch((err) => console.error("Failed to update event registration counts:", err));
-    }
-    response.json({ success: true, dashboard: participantModel(user, request) });
-  });
-
-  app.get("/api/portal/participant/tickets/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    const registration = registrations.find((item) => item.userId === user.id && item.eventSlug === request.params.slug);
-    const event = publicEvents.find((item) => item.slug === request.params.slug);
-    if (!registration || !event) return response.status(404).json({ error: "Ticket not found" });
+  app.get("/api/portal/participant", requireParticipantAccess, asyncHandler(async (request, response) => response.json(await participantModel(response.locals.user as User, request))));
+  app.post("/api/portal/participant/favorites/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const slug = String(request.params.slug);
+    if (!(await prisma.event.findFirst({ where: { slug, deletedAt: null } }))) throw new HttpError(404, "Event not found");
+    const favorites = [...new Set([...user.favorites, slug])];
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { favorites } });
+    response.json(await participantModel(updated, request));
+  }));
+  app.delete("/api/portal/participant/favorites/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { favorites: user.favorites.filter((slug) => slug !== request.params.slug) } });
+    response.json(await participantModel(updated, request));
+  }));
+  app.post("/api/portal/participant/register/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const registration = await registerForEvent(user, String(request.params.slug));
+    response.status(201).json({ registration, dashboard: await participantModel(user, request) });
+  }));
+  app.delete("/api/portal/participant/register/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const registration = await prisma.registration.findUnique({ where: { userId_eventSlug: { userId: user.id, eventSlug: String(request.params.slug) } } });
+    if (!registration || registration.status !== "active") throw new HttpError(404, "Active registration not found");
+    await prisma.registration.update({ where: { id: registration.id }, data: { status: "cancelled", cancelledAt: new Date().toISOString() } });
+    await prisma.event.updateMany({ where: { slug: registration.eventSlug, reservedCount: { gt: 0 }, rsvpCount: { gt: 0 } }, data: { reservedCount: { decrement: 1 }, rsvpCount: { decrement: 1 } } });
+    const cached = cachedEvents.find((event) => event.slug === registration.eventSlug);
+    if (cached) cached.rsvpCount = Math.max(0, cached.rsvpCount - 1);
+    response.json({ success: true, dashboard: await participantModel(user, request) });
+  }));
+  app.get("/api/portal/participant/tickets/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const slug = String(request.params.slug);
+    const registration = await prisma.registration.findUnique({ where: { userId_eventSlug: { userId: user.id, eventSlug: slug } } });
+    const event = await prisma.event.findUnique({ where: { slug } });
+    if (!registration || registration.status !== "active" || !event) throw new HttpError(404, "Ticket not found");
     response.type("text/plain").send(`Voryn Ticket\n${event.title}\n${event.startsAt}\n${event.venue}\nCode: ${registration.ticketCode}`);
-  });
-
-  app.post("/api/portal/participant/reviews/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    const review = {
-      id: `review_${Date.now()}`,
-      userId: user.id,
-      eventSlug: request.params.slug,
-      rating: Math.max(1, Math.min(5, Number(request.body.rating ?? 5))),
-      comment: String(request.body.comment ?? ""),
-      createdAt: new Date().toISOString()
-    };
-    reviews.push(review);
-    persistPortalState();
-    prisma.review.create({ data: review }).catch((err) => console.error("Failed to save review:", err));
-    response.json(participantModel(user, request));
-  });
-
-  app.post("/api/portal/participant/follow/:slug", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    const organizer = organizers.find((item) => item.slug === request.params.slug);
-    if (!organizer) return response.status(404).json({ error: "Organizer not found" });
+  }));
+  app.post("/api/portal/participant/reviews/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const input = reviewSchema.parse(request.body);
+    const slug = String(request.params.slug);
+    const registration = await prisma.registration.findUnique({ where: { userId_eventSlug: { userId: user.id, eventSlug: slug } } });
+    if (!registration) throw new HttpError(403, "Only registered attendees can review this event");
+    await prisma.review.create({ data: { userId: user.id, eventSlug: slug, rating: input.rating, comment: input.comment, createdAt: new Date().toISOString() } });
+    response.json(await participantModel(user, request));
+  }));
+  app.post("/api/portal/participant/follow/:slug", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const organizer = await prisma.organizer.findUnique({ where: { slug: String(request.params.slug) } });
+    if (!organizer) throw new HttpError(404, "Organizer not found");
     if (!user.following.includes(organizer.slug)) {
-      user.following.push(organizer.slug);
-      organizer.followers += 1;
-      persistPortalState();
+      await prisma.user.update({ where: { id: user.id }, data: { following: [...user.following, organizer.slug] } });
+      await prisma.organizer.update({ where: { id: organizer.id }, data: { followers: { increment: 1 } } });
     }
-    response.json(participantModel(user, request));
-  });
+    const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    response.json(await participantModel(updated, request));
+  }));
+  app.put("/api/portal/participant/notifications", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const notifications = { email: Boolean(request.body.email), push: Boolean(request.body.push), smsReady: Boolean(request.body.smsReady) };
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { notifications } });
+    response.json(await participantModel(updated, request));
+  }));
+  app.put("/api/portal/participant/profile", requireParticipantAccess, asyncHandler(async (request, response) => {
+    const user = response.locals.user as User;
+    const input = profileSchema.parse(request.body);
+    const updated = await prisma.user.update({ where: { id: user.id }, data: { name: input.name, email: normalizeEmail(input.email), profileImage: input.profileImage } });
+    response.json(await participantModel(updated, request));
+  }));
 
-  app.put("/api/portal/participant/notifications", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    user.notifications = {
-      email: Boolean(request.body.email),
-      push: Boolean(request.body.push),
-      smsReady: Boolean(request.body.smsReady)
-    };
-    persistPortalState();
-    prisma.user.update({
-      where: { email: user.email },
-      data: { notifications: user.notifications }
-    }).catch((err) => console.error("Failed to update user notifications in DB:", err));
-    response.json(participantModel(user, request));
-  });
-
-  app.put("/api/portal/participant/profile", (request, response) => {
-    const user = requireRole(request, response, ["participant"]);
-    if (!user) return;
-    user.name = String(request.body.name ?? user.name);
-    user.email = String(request.body.email ?? user.email).trim().toLowerCase();
-    user.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : user.profileImage;
-    persistPortalState();
-    prisma.user.update({
-      where: { id: user.id },
-      data: { name: user.name, email: user.email, profileImage: user.profileImage }
-    }).catch((err) => console.error("Failed to update user profile in DB:", err));
-    response.json(participantModel(user, request));
-  });
-
-  app.get("/api/portal/organizer", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    response.json(organizerModel(user));
-  });
-
-  app.put("/api/portal/organizer/profile", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    user.name = String(request.body.name ?? user.name);
-    user.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : user.profileImage;
-    
-    const organizer = organizerFor(user);
-    organizer.name = String(request.body.organizerName ?? organizer.name);
-    organizer.bio = String(request.body.bio ?? organizer.bio);
-    organizer.website = String(request.body.website ?? organizer.website);
-    organizer.profileImage = request.body.profileImage !== undefined ? String(request.body.profileImage) : organizer.profileImage;
-    
-    persistPortalState();
-    prisma.user.update({
-      where: { id: user.id },
-      data: { name: user.name, profileImage: user.profileImage }
-    }).catch((err) => console.error("Failed to update user profile image in DB:", err));
-    prisma.organizer.update({
-      where: { slug: organizer.slug },
-      data: { name: organizer.name, bio: organizer.bio, website: organizer.website, profileImage: organizer.profileImage }
-    }).catch((err) => console.error("Failed to update organizer profile image in DB:", err));
-    response.json(organizerModel(user));
-  });
-
-  app.post("/api/portal/organizer/events", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    const organizer = organizerFor(user);
-    const city = cities.find((item) => item.slug === request.body.citySlug) ?? cities[0];
-    const title = String(request.body.title ?? "Untitled Event");
-    const event: Event = {
-      id: `evt_${Date.now()}`,
-      title,
-      slug: uniqueSlug(title, new Set(allEvents.map((item) => item.slug))),
-      citySlug: city.slug,
-      country: city.country,
-      category: interests.includes(request.body.category) ? request.body.category : "Technology",
-      type: request.body.type === "webinar" ? "webinar" : "conference",
-      mode: request.body.mode === "global" || request.body.mode === "online" ? request.body.mode : "local",
-      status: (["draft", "published", "sold-out", "cancelled", "completed"].includes(request.body.status)
-        ? request.body.status
-        : "draft") as EventStatus,
-      organizerSlug: organizer.slug,
-      startsAt: String(request.body.startsAt ?? new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()),
-      venue: String(request.body.venue ?? "TBA"),
-      summary: String(request.body.summary ?? "A new event on Voryn."),
-      media: {
-        coverImage: String(request.body.coverImage ?? "https://images.unsplash.com/photo-1511578314322-379afb476865?auto=format&fit=crop&w=1400&q=80"),
-        heroImage: String(request.body.heroImage ?? "https://images.unsplash.com/photo-1505373877841-8d25f7d46678?auto=format&fit=crop&w=1900&q=80"),
-        thumbnail: String(request.body.thumbnail ?? "https://images.unsplash.com/photo-1528605248644-14dd04022da1?auto=format&fit=crop&w=700&q=80"),
-        gallery: Array.isArray(request.body.gallery) ? request.body.gallery.map(String) : []
-      },
-      attendeeCount: 0,
-      rsvpCount: 0,
-      ticketSalesCount: 0,
-      badges: ["recently-added"],
-      priceLabel: String(request.body.priceLabel ?? "Free")
-    };
+  app.get("/api/portal/organizer", requireOrganizer, requireOrganizationPermission, asyncHandler(async (_request, response) => response.json(await organizerModel(response.locals.user as User))));
+  app.put("/api/portal/organizer/profile", requireOrganizer, requireOrganizationPermission, asyncHandler(async (request, response) => {
+    const input = organizerProfileSchema.parse(request.body);
+    const user = response.locals.user as User;
+    const organizer = await organizerFor(user);
+    const [updatedUser] = await Promise.all([
+      prisma.user.update({ where: { id: user.id }, data: { name: input.name, profileImage: input.profileImage } }),
+      prisma.organizer.update({ where: { id: organizer.id }, data: { name: input.organizerName, bio: input.bio, website: input.website, profileImage: input.profileImage ?? organizer.profileImage } })
+    ]);
+    response.json(await organizerModel(updatedUser));
+  }));
+  app.post("/api/portal/organizer/events", requireOrganizer, requireOrganizationPermission, asyncHandler(async (request, response) => {
+    const input = eventCreateSchema.parse(request.body);
+    const user = response.locals.user as User;
+    const organizer = await organizerFor(user);
+    const city = await prisma.city.findUnique({ where: { slug: input.citySlug } });
+    if (!city) throw new HttpError(422, "Unknown city");
+    const slugs = new Set((await prisma.event.findMany({ select: { slug: true } })).map(({ slug }) => slug));
+    const media = { coverImage: input.coverImage ?? "", heroImage: input.heroImage ?? "", thumbnail: input.thumbnail ?? "", gallery: input.gallery ?? [] };
+    const created = await prisma.event.create({ data: { title: input.title, slug: uniqueSlug(input.title, slugs), summary: input.summary, category: input.category, type: input.type, mode: input.mode, status: input.status, startsAt: input.startsAt, venue: input.venue, citySlug: city.slug, country: city.country, organizerSlug: organizer.slug, media, attendeeCount: 0, rsvpCount: 0, ticketSalesCount: 0, badges: ["recently-added"], priceLabel: input.priceLabel, capacity: input.capacity, reservedCount: 0 } });
+    const event = domainEvent(created);
     addEventToStore(event);
-    persistPortalState();
-    prisma.event.create({
-      data: {
-        title: event.title,
-        slug: event.slug,
-        summary: event.summary,
-        category: event.category,
-        type: event.type,
-        mode: event.mode,
-        status: event.status,
-        startsAt: event.startsAt,
-        venue: event.venue,
-        citySlug: event.citySlug,
-        country: event.country,
-        organizerSlug: event.organizerSlug,
-        media: event.media,
-        attendeeCount: event.attendeeCount,
-        rsvpCount: event.rsvpCount,
-        ticketSalesCount: event.ticketSalesCount,
-        badges: event.badges,
-        priceLabel: event.priceLabel,
-      }
-    }).catch((err) => console.error("Failed to create event:", err));
-
-    response.status(201).json({ event, dashboard: organizerModel(user) });
-  });
-
-  app.put("/api/portal/organizer/events/:slug", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    const event = allEvents.find((item) => item.slug === request.params.slug);
-    if (!event) return response.status(404).json({ error: "Event not found" });
-    if (user.role !== "admin" && event.organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
-    const city = cities.find((item) => item.slug === request.body.citySlug);
-    Object.assign(event, {
-      title: request.body.title ?? event.title,
-      category: interests.includes(request.body.category) ? request.body.category : event.category,
-      status: request.body.status ?? event.status,
-      startsAt: request.body.startsAt ?? event.startsAt,
-      venue: request.body.venue ?? event.venue,
-      summary: request.body.summary ?? event.summary,
-      priceLabel: request.body.priceLabel ?? event.priceLabel,
-      citySlug: city?.slug ?? event.citySlug,
-      country: city?.country ?? event.country,
-      media: {
-        ...event.media,
-        coverImage: request.body.coverImage ?? event.media.coverImage,
-        heroImage: request.body.heroImage ?? event.media.heroImage,
-        thumbnail: request.body.thumbnail ?? event.media.thumbnail,
-        gallery: Array.isArray(request.body.gallery) ? request.body.gallery.map(String) : (event.media.gallery ?? [])
-      }
-    });
+    response.status(201).json({ event, dashboard: await organizerModel(user) });
+  }));
+  app.put("/api/portal/organizer/events/:slug", requireOrganizer, requireOrganizationPermission, requireEventOwnership, asyncHandler(async (request, response) => {
+    const input = eventUpdateSchema.parse(request.body);
+    const existing = response.locals.event as DbEvent;
+    const status = input.status ?? existing.status as EventStatus;
+    const transitions: Record<string, string[]> = { draft: ["draft", "published", "cancelled"], published: ["published", "sold-out", "cancelled", "completed"], "sold-out": ["sold-out", "published", "cancelled", "completed"], cancelled: ["cancelled"], completed: ["completed"] };
+    if (!transitions[existing.status]?.includes(status)) throw new HttpError(409, "Invalid event status transition");
+    const city = input.citySlug ? await prisma.city.findUnique({ where: { slug: input.citySlug } }) : null;
+    if (input.citySlug && !city) throw new HttpError(422, "Unknown city");
+    const currentMedia = existing.media as Event["media"];
+    if (input.capacity !== undefined && input.capacity !== null && input.capacity < existing.reservedCount) throw new HttpError(409, "Capacity cannot be lower than active registrations");
+    const updated = await prisma.event.update({ where: { id: existing.id }, data: {
+      title: input.title, citySlug: input.citySlug, category: input.category, type: input.type, mode: input.mode,
+      status, startsAt: input.startsAt, venue: input.venue, summary: input.summary, priceLabel: input.priceLabel,
+      capacity: input.capacity, country: city?.country ?? existing.country,
+      media: { ...currentMedia, coverImage: input.coverImage ?? currentMedia.coverImage, heroImage: input.heroImage ?? currentMedia.heroImage, thumbnail: input.thumbnail ?? currentMedia.thumbnail, gallery: input.gallery ?? currentMedia.gallery ?? [] }
+    } });
+    const event = domainEvent(updated);
+    const cached = cachedEvents.find((item) => item.slug === event.slug);
+    if (cached) Object.assign(cached, event); else addEventToStore(event);
     updateEventVisibility(event);
-    persistPortalState();
-
-    prisma.event.update({
-      where: { slug: event.slug },
-      data: {
-        title: event.title,
-        category: event.category,
-        status: event.status,
-        startsAt: event.startsAt,
-        venue: event.venue,
-        summary: event.summary,
-        priceLabel: event.priceLabel,
-        citySlug: event.citySlug,
-        country: event.country,
-        media: event.media,
-      }
-    }).catch((err) => console.error("Failed to update event in DB:", err));
-
-    response.json({ event, dashboard: organizerModel(user) });
-  });
-
-  app.delete("/api/portal/organizer/events/:slug", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    const index = allEvents.findIndex((event) => event.slug === request.params.slug);
-    if (index === -1) return response.status(404).json({ error: "Event not found" });
-    if (user.role !== "admin" && allEvents[index].organizerSlug !== organizerFor(user).slug) return response.status(403).json({ error: "Not your event" });
-    const event = allEvents[index];
+    response.json({ event, dashboard: await organizerModel(response.locals.user as User) });
+  }));
+  app.delete("/api/portal/organizer/events/:slug", requireOrganizer, requireOrganizationPermission, requireEventOwnership, asyncHandler(async (_request, response) => {
+    const event = response.locals.event as DbEvent;
+    const registrationCount = await prisma.registration.count({ where: { eventSlug: event.slug, status: "active" } });
+    if (registrationCount > 0) throw new HttpError(409, "Events with active registrations cannot be deleted; cancel the event instead");
+    await prisma.event.update({ where: { id: event.id }, data: { deletedAt: new Date(), status: "cancelled" } });
     removeEventFromStore(event.slug);
-    persistPortalState();
-
-    prisma.event.delete({
-      where: { slug: event.slug }
-    }).catch((err) => console.error("Failed to delete event from DB:", err));
-
-    response.json({ event, dashboard: organizerModel(user) });
-  });
-
-  app.post("/api/portal/organizer/announcements", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    const organizer = organizerFor(user);
-    const announcement: Announcement = {
-      id: `ann_${Date.now()}`,
-      organizerSlug: organizer.slug,
-      eventSlug: String(request.body.eventSlug ?? ""),
-      subject: String(request.body.subject ?? "Event update"),
-      message: String(request.body.message ?? ""),
-      sentAt: new Date().toISOString()
-    };
-    announcements.push(announcement);
-    persistPortalState();
-    prisma.announcement.create({ data: announcement }).catch((err) => console.error("Failed to save announcement:", err));
-    response.json({ announcement, dashboard: organizerModel(user) });
-  });
-
-  app.get("/api/portal/organizer/attendees/export", (request, response) => {
-    const user = requireRole(request, response, ["organizer"]);
-    if (!user) return;
-    const model = organizerModel(user);
-    const rows = ["eventSlug,name,email,ticketCode,registeredAt"].concat(
-      model.attendees.map((attendee) =>
-        [attendee.eventSlug, attendee.user.name, attendee.user.email, attendee.ticketCode, attendee.registeredAt].join(",")
-      )
-    );
+    response.json({ event: domainEvent(event), dashboard: await organizerModel(response.locals.user as User) });
+  }));
+  app.post("/api/portal/organizer/announcements", requireOrganizer, requireOrganizationPermission, asyncHandler(async (request, response) => {
+    const input = announcementSchema.parse(request.body);
+    const user = response.locals.user as User;
+    const organizer = await organizerFor(user);
+    const event = await prisma.event.findFirst({ where: { slug: input.eventSlug, organizerSlug: organizer.slug, deletedAt: null } });
+    if (!event) throw new HttpError(403, "Event does not belong to this organizer");
+    const announcement = await prisma.announcement.create({ data: { ...input, organizerSlug: organizer.slug, sentAt: new Date().toISOString() } });
+    response.json({ announcement, dashboard: await organizerModel(user) });
+  }));
+  app.get("/api/portal/organizer/attendees/export", requireOrganizer, requireOrganizationPermission, asyncHandler(async (_request, response) => {
+    const model = await organizerModel(response.locals.user as User);
+    const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = ["eventSlug,name,email,ticketCode,registeredAt", ...model.attendees.map((attendee) => [attendee.eventSlug, attendee.user.name, attendee.user.email, attendee.ticketCode, attendee.registeredAt].map(escape).join(","))];
     response.header("Content-Type", "text/csv").attachment("voryn-attendees.csv").send(rows.join("\n"));
-  });
+  }));
 
-  app.get("/api/portal/admin", (request, response) => {
-    const user = requireRole(request, response, ["admin"]);
-    if (!user) return;
-    response.json(adminModel());
-  });
+  app.get("/api/portal/admin", requireAdmin, asyncHandler(async (request, response) => {
+    const page = Math.max(1, Number(request.query.page) || 1);
+    const take = Math.min(100, Math.max(1, Number(request.query.limit) || 50));
+    const [users, organizers, events, registrations, reports, counts] = await Promise.all([
+      prisma.user.findMany({ skip: (page - 1) * take, take }), prisma.organizer.findMany({ take: 100 }), prisma.event.findMany({ where: { deletedAt: null }, take: 100 }),
+      prisma.registration.findMany({ take: 100 }), prisma.review.findMany({ where: { rating: { lte: 2 } }, take: 100 }),
+      Promise.all([prisma.user.count(), prisma.organizer.count(), prisma.event.count({ where: { deletedAt: null } }), prisma.registration.count({ where: { status: "active" } })])
+    ]);
+    response.json({ users: users.map(safeUser), organizers, events: events.map(domainEvent), registrations, reports, analytics: { users: counts[0], organizers: counts[1], events: counts[2], registrations: counts[3], revenue: null }, pagination: { page, limit: take } });
+  }));
 
-  app.get("/api/events/:slug/calendar", (request, response) => {
-    const event = publicEvents.find((item) => item.slug === request.params.slug);
-    if (!event) return response.status(404).json({ error: "Event not found" });
+  app.get("/api/events/:slug/calendar", asyncHandler(async (request, response) => {
+    const event = await prisma.event.findFirst({ where: { slug: String(request.params.slug), deletedAt: null, status: { not: "draft" } } });
+    if (!event) throw new HttpError(404, "Event not found");
     response.json(eventCalendarLinks(request, event));
-  });
-
-  app.get("/api/calendar/:slug.ics", (request, response) => {
+  }));
+  app.get("/api/calendar/:slug.ics", asyncHandler(async (request, response) => {
     const event = publicEvents.find((item) => item.slug === request.params.slug);
-    if (!event) return response.status(404).send("Event not found");
+    if (!event) throw new HttpError(404, "Event not found");
     response.header("Content-Type", "text/calendar").attachment(`${event.slug}.ics`).send(buildIcs(event));
-  });
+  }));
 }
+
+export { currentUser, registerForEvent };

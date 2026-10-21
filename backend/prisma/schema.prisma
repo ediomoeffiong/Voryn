@@ -20,9 +20,9 @@ model City {
 }
 
 model Organizer {
-  id                   String @id @default(auto()) @map("_id") @db.ObjectId
+  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
   name                 String
-  slug                 String @unique
+  slug                 String   @unique
   profileImage         String
   coverImage           String
   bio                  String
@@ -30,12 +30,14 @@ model Organizer {
   socials              Json
   followers            Int
   totalAttendeesHosted Int
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 }
 
 model Event {
-  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  id               String    @id @default(auto()) @map("_id") @db.ObjectId
   title            String
-  slug             String   @unique
+  slug             String    @unique
   summary          String
   category         String
   type             String
@@ -52,20 +54,33 @@ model Event {
   ticketSalesCount Int
   badges           String[]
   priceLabel       String
+  capacity         Int?
+  reservedCount    Int       @default(0)
+  deletedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([organizerSlug, status])
+  @@index([citySlug, status])
 }
 
 model User {
-  id            String   @id @default(auto()) @map("_id") @db.ObjectId
-  name          String
-  email         String   @unique
-  password      String
-  role          String
-  lastDashboard String   @default("participant")
-  organizerSlug String?
-  favorites     String[]
-  following     String[]
-  notifications Json
-  profileImage  String?
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
+  name                  String
+  email                 String   @unique
+  passwordHash          String   @map("password")
+  role                  String
+  lastDashboard         String   @default("participant")
+  organizerSlug         String?
+  favorites             String[]
+  following             String[]
+  notifications         Json
+  profileImage          String?
+  passwordResetRequired Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([role])
 }
 
 model Registration {
@@ -76,6 +91,11 @@ model Registration {
   checkedIn    Boolean
   ticketCode   String
   reminders    Json
+  status       String  @default("active")
+  cancelledAt  String?
+
+  @@unique([userId, eventSlug])
+  @@index([eventSlug, status])
 }
 
 model Announcement {
@@ -97,7 +117,24 @@ model Review {
 }
 
 model Session {
-  id     String @id @default(auto()) @map("_id") @db.ObjectId
-  token  String @unique
-  userId String
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String   @unique @map("token")
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(auto()) @map("_id") @db.ObjectId
+  tokenHash String    @unique
+  userId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
 }

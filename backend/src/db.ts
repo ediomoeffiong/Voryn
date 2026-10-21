@@ -1,222 +1,47 @@
 import { PrismaClient } from "@prisma/client";
-import { cities, organizers, events, publicEvents, syncPublicEvents } from "./data.js";
-import { users, registrations, announcements, reviews, sessions } from "./portal.js";
+import { cities, organizers, events, syncPublicEvents } from "./data.js";
+import type { City, Event, Organizer } from "./domain.js";
 
 export const prisma = new PrismaClient();
+let ready = false;
+
+export function isDatabaseReady() {
+  return ready;
+}
+
+function hydrate(dbCities: Awaited<ReturnType<typeof prisma.city.findMany>>, dbOrganizers: Awaited<ReturnType<typeof prisma.organizer.findMany>>, dbEvents: Awaited<ReturnType<typeof prisma.event.findMany>>) {
+  cities.splice(0, cities.length, ...dbCities.map((city) => ({ ...city, coordinates: city.coordinates as City["coordinates"] })));
+  organizers.splice(0, organizers.length, ...dbOrganizers.map((organizer) => ({ ...organizer, socials: organizer.socials as Organizer["socials"] })));
+  events.splice(0, events.length, ...dbEvents.filter((event) => !event.deletedAt).map((event) => ({
+    id: event.id, title: event.title, slug: event.slug, summary: event.summary,
+    category: event.category as Event["category"], type: event.type as Event["type"], mode: event.mode as Event["mode"],
+    status: event.status as Event["status"], startsAt: event.startsAt, venue: event.venue, citySlug: event.citySlug,
+    country: event.country, organizerSlug: event.organizerSlug, media: event.media as Event["media"],
+    attendeeCount: event.attendeeCount, rsvpCount: event.rsvpCount, ticketSalesCount: event.ticketSalesCount,
+    badges: event.badges as Event["badges"], priceLabel: event.priceLabel
+  })));
+  syncPublicEvents();
+}
+
+async function seedDevelopmentFixtures() {
+  if (process.env.NODE_ENV === "production" || process.env.ENABLE_DEMO_SEED !== "true") return;
+  const [cityCount, organizerCount, eventCount] = await Promise.all([prisma.city.count(), prisma.organizer.count(), prisma.event.count()]);
+  if (cityCount === 0) for (const { id: _id, ...city } of cities) await prisma.city.create({ data: city });
+  if (organizerCount === 0) for (const { id: _id, ...organizer } of organizers) await prisma.organizer.create({ data: organizer });
+  if (eventCount === 0) for (const { id: _id, ...event } of events) await prisma.event.create({ data: { ...event, reservedCount: 0 } });
+}
 
 export async function initDb() {
-  try {
-    console.log("Connecting to MongoDB...");
-    await prisma.$connect();
-    console.log("Connected to MongoDB successfully.");
+  if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+  await prisma.$connect();
+  await prisma.$runCommandRaw({ ping: 1 });
+  await seedDevelopmentFixtures();
+  const [dbCities, dbOrganizers, dbEvents] = await Promise.all([prisma.city.findMany(), prisma.organizer.findMany(), prisma.event.findMany()]);
+  hydrate(dbCities, dbOrganizers, dbEvents);
+  ready = true;
+}
 
-    // Check if City collection is seeded
-    const cityCount = await prisma.city.count();
-    if (cityCount === 0) {
-      console.log("Seeding default data to MongoDB...");
-      
-      // Seed Cities
-      for (const city of cities) {
-        await prisma.city.create({
-          data: {
-            name: city.name,
-            slug: city.slug,
-            country: city.country,
-            countryCode: city.countryCode,
-            region: city.region,
-            timezone: city.timezone,
-            heroImage: city.heroImage,
-            coordinates: city.coordinates,
-          }
-        });
-      }
-
-      // Seed Organizers
-      for (const org of organizers) {
-        await prisma.organizer.create({
-          data: {
-            name: org.name,
-            slug: org.slug,
-            profileImage: org.profileImage,
-            coverImage: org.coverImage,
-            bio: org.bio,
-            website: org.website,
-            socials: org.socials,
-            followers: org.followers,
-            totalAttendeesHosted: org.totalAttendeesHosted,
-          }
-        });
-      }
-
-      // Seed Events
-      for (const event of publicEvents) {
-        await prisma.event.create({
-          data: {
-            title: event.title,
-            slug: event.slug,
-            summary: event.summary,
-            category: event.category,
-            type: event.type,
-            mode: event.mode,
-            status: event.status,
-            startsAt: event.startsAt,
-            venue: event.venue,
-            citySlug: event.citySlug,
-            country: event.country,
-            organizerSlug: event.organizerSlug,
-            media: event.media,
-            attendeeCount: event.attendeeCount,
-            rsvpCount: event.rsvpCount,
-            ticketSalesCount: event.ticketSalesCount,
-            badges: event.badges,
-            priceLabel: event.priceLabel,
-          }
-        });
-      }
-
-      // Seed Users
-      for (const user of users) {
-        await prisma.user.create({
-          data: {
-            name: user.name,
-            email: user.email,
-            password: user.password,
-            role: user.role,
-            lastDashboard: user.lastDashboard,
-            organizerSlug: user.organizerSlug,
-            favorites: user.favorites,
-            following: user.following,
-            notifications: user.notifications,
-            profileImage: user.profileImage,
-          }
-        });
-      }
-
-      console.log("Database seeded successfully.");
-    } else {
-      console.log("Loading data from MongoDB...");
-      
-      // Load Cities
-      const dbCities = await prisma.city.findMany();
-      cities.length = 0;
-      cities.push(...dbCities.map(c => ({
-        id: c.id,
-        name: c.name,
-        slug: c.slug,
-        country: c.country,
-        countryCode: c.countryCode,
-        region: c.region,
-        timezone: c.timezone,
-        heroImage: c.heroImage,
-        coordinates: c.coordinates as { lat: number; lng: number }
-      })));
-
-      // Load Organizers
-      const dbOrganizers = await prisma.organizer.findMany();
-      organizers.length = 0;
-      organizers.push(...dbOrganizers.map(o => ({
-        id: o.id,
-        name: o.name,
-        slug: o.slug,
-        profileImage: o.profileImage,
-        coverImage: o.coverImage,
-        bio: o.bio,
-        website: o.website,
-        socials: o.socials as any,
-        followers: o.followers,
-        totalAttendeesHosted: o.totalAttendeesHosted
-      })));
-
-      // Load Events
-      const dbEvents = await prisma.event.findMany();
-      events.length = 0;
-      events.push(...dbEvents.map(e => ({
-        id: e.id,
-        title: e.title,
-        slug: e.slug,
-        summary: e.summary,
-        category: e.category as any,
-        type: e.type as any,
-        mode: e.mode as any,
-        status: e.status as any,
-        startsAt: e.startsAt,
-        venue: e.venue,
-        citySlug: e.citySlug,
-        country: e.country,
-        organizerSlug: e.organizerSlug,
-        media: e.media as any,
-        attendeeCount: e.attendeeCount,
-        rsvpCount: e.rsvpCount,
-        ticketSalesCount: e.ticketSalesCount,
-        badges: e.badges as any,
-        priceLabel: e.priceLabel
-      })));
-      syncPublicEvents();
-
-      // Load Users
-      const dbUsers = await prisma.user.findMany();
-      users.length = 0;
-      users.push(...dbUsers.map(u => ({
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        password: u.password,
-        role: u.role as any,
-        lastDashboard: (u.lastDashboard as any) ?? (u.role === "admin" ? "admin" : u.role === "organizer" ? "organizer" : "participant"),
-        organizerSlug: u.organizerSlug ?? undefined,
-        favorites: u.favorites,
-        following: u.following,
-        notifications: u.notifications as any,
-        profileImage: u.profileImage ?? undefined
-      })));
-
-      // Load Registrations
-      const dbRegistrations = await prisma.registration.findMany();
-      registrations.length = 0;
-      registrations.push(...dbRegistrations.map(r => ({
-        id: r.id,
-        userId: r.userId,
-        eventSlug: r.eventSlug,
-        registeredAt: r.registeredAt,
-        checkedIn: r.checkedIn,
-        ticketCode: r.ticketCode,
-        reminders: r.reminders as any
-      })));
-
-      // Load Announcements
-      const dbAnnouncements = await prisma.announcement.findMany();
-      announcements.length = 0;
-      announcements.push(...dbAnnouncements.map(a => ({
-        id: a.id,
-        organizerSlug: a.organizerSlug,
-        eventSlug: a.eventSlug,
-        subject: a.subject,
-        message: a.message,
-        sentAt: a.sentAt
-      })));
-
-      // Load Reviews
-      const dbReviews = await prisma.review.findMany();
-      reviews.length = 0;
-      reviews.push(...dbReviews.map(r => ({
-        id: r.id,
-        userId: r.userId,
-        eventSlug: r.eventSlug,
-        rating: r.rating,
-        comment: r.comment,
-        createdAt: r.createdAt
-      })));
-
-      // Load Sessions
-      const dbSessions = await prisma.session.findMany();
-      sessions.clear();
-      for (const s of dbSessions) {
-        sessions.set(s.token, s.userId);
-      }
-
-      console.log(`Data loaded successfully from MongoDB. Loaded: ${cities.length} cities, ${organizers.length} organizers, ${publicEvents.length} events, ${users.length} users.`);
-    }
-  } catch (error) {
-    console.error("Failed to initialize MongoDB database:", error);
-  }
+export async function disconnectDb() {
+  ready = false;
+  await prisma.$disconnect();
 }

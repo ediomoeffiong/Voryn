@@ -7,17 +7,31 @@
     "dev": "tsx watch src/server.ts",
     "build": "prisma generate && tsc",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run src",
+    "admin:bootstrap": "tsx src/scripts/bootstrap-admin.ts --confirm",
+    "migrate:stage1:dry-run": "tsx src/scripts/migrate-stage1.ts",
+    "migrate:stage1": "tsx src/scripts/migrate-stage1.ts --apply"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
+    "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "express-rate-limit": "^8.7.1",
+    "helmet": "^8.3.0",
     "prisma": "^5.16.1",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.1",
+    "vitest": "^5.0.5"
   }
 }
