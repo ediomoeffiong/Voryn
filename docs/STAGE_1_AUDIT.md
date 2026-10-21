@@ -6,7 +6,7 @@ Audit date: 2026-10-21
 
 | Finding | Evidence before repair | Resolution |
 |---|---|---|
-| Plaintext credentials | `portal.ts` seeded and compared the literal `password`; `User.password` stored it. | Node's maintained `scrypt` KDF with random salts; the mapped database field now exposes only `passwordHash`. Legacy non-hash values are never authenticated and are marked for reset. |
+| Plaintext credentials | `portal.ts` seeded and compared the literal `password`; `User.password` stored it. | Node's maintained `scrypt` KDF with random salts; the mapped database field now exposes only `passwordHash`. A matching legacy password is upgraded to scrypt atomically during login; new and upgraded credentials are never stored as plaintext. |
 | Public administrator creation | `POST /api/admin/auth/signup` created an admin without privilege. | Endpoint returns 404. An explicit environment-driven CLI with `--confirm` is the only bootstrap path. |
 | Demo secrets exposed | Login fields and help text displayed three known accounts and `password`. | Prefills and credential text removed. Production never auto-seeds users. |
 | Reusable bearer tokens | Predictable `Math.random` tokens lived in a Map, JSON, MongoDB, and browser `localStorage`. | Random 256-bit tokens are sent only in HttpOnly cookies; only SHA-256 token hashes are stored with expiry; logout revokes the record. |

@@ -34,6 +34,13 @@ export async function verifyPassword(password: string, encoded: string) {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
+export function verifyLegacyPassword(password: string, storedPassword: string) {
+  if (isPasswordHash(storedPassword)) return false;
+  const expected = createHash("sha256").update(storedPassword).digest();
+  const actual = createHash("sha256").update(password).digest();
+  return timingSafeEqual(expected, actual);
+}
+
 export function createOpaqueToken(bytes = 32) {
   return randomBytes(bytes).toString("base64url");
 }

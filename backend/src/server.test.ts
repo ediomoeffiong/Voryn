@@ -25,4 +25,12 @@ describe("Stage 1 public authorization surface", () => {
     const response = await request(createApp()).post("/api/auth/login").send({ email: "person@example.com", password: "A-Strong-Password-2026" });
     expect(response.status).toBe(403);
   });
+
+  it("returns the actionable validation message for invalid signup input", async () => {
+    const agent = request.agent(createApp());
+    const csrf = await agent.get("/api/auth/csrf");
+    const response = await agent.post("/api/auth/signup").set("X-CSRF-Token", csrf.body.csrfToken).send({ name: "Person", email: "person@example.com", password: "short", role: "participant" });
+    expect(response.status).toBe(422);
+    expect(response.body.error).toBe("Password must be 12 to 128 characters.");
+  });
 });

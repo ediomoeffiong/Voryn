@@ -1230,9 +1230,10 @@ function AuthPage({
             </button>
             {!adminOnly ? <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Sign up</button> : null}
           </div>
-          {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" /> : null}
-          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" />
+          {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" autoComplete="name" minLength={2} maxLength={100} required /> : null}
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" type="email" autoComplete="email" maxLength={254} required />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={mode === "signup" ? 12 : undefined} maxLength={128} required />
+          {mode === "signup" ? <small className="form-hint">Use 12–128 characters with uppercase, lowercase, and a number.</small> : null}
           {mode === "signup" && !adminOnly ? (
             <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)}>
               <option value="participant">Attendee</option>

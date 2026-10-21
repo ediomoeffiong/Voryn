@@ -17,7 +17,8 @@ export const errorHandler: ErrorRequestHandler = (error, _request, response, _ne
     return;
   }
   if (error instanceof ZodError) {
-    response.status(422).json({ error: "Validation failed", issues: error.issues.map(({ path, message }) => ({ path, message })) });
+    const issues = error.issues.map(({ path, message }) => ({ path, message }));
+    response.status(422).json({ error: issues[0]?.message ?? "Validation failed", issues });
     return;
   }
   if (error instanceof HttpError) {

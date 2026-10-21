@@ -11,7 +11,7 @@
 7. Run the dry-run again, start the API, and verify `/api/ready` returns 200.
 8. Compare collection counts and sample ownership/registration relationships with the pre-change report.
 
-The migration is repeatable. Missing defaults are added idempotently and the capacity reservation count is recalculated from active registrations. Legacy sessions are revoked. Plaintext-looking passwords are preserved, never printed, marked `passwordResetRequired`, and cannot authenticate. Users recover through a single-use 30-minute reset token once `EMAIL_WEBHOOK_URL` is configured.
+The migration is repeatable. Missing defaults are added idempotently and the capacity reservation count is recalculated from active registrations. Legacy sessions are revoked. Plaintext-looking passwords are preserved, never printed, and marked `passwordResetRequired`. When the user next supplies the matching password, login immediately replaces it with a salted scrypt hash and clears the reset flag. Users can also recover through a single-use 30-minute reset token once `EMAIL_WEBHOOK_URL` is configured.
 
 Duplicate email/registration keys and broken references are never guessed or overwritten. To roll back, stop the service and restore the provider snapshot (preferred) or JSON backup into a separate recovery database, then deploy the prior application. Do not drop current collections.
 

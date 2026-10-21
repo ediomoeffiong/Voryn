@@ -1,17 +1,22 @@
 import { z } from "zod";
 
+const newPasswordSchema = z.string()
+  .min(12, "Password must be 12 to 128 characters.")
+  .max(128, "Password must be 12 to 128 characters.")
+  .refine((password) => /[a-z]/.test(password) && /[A-Z]/.test(password) && /\d/.test(password), "Password must include uppercase, lowercase, and numeric characters.");
+
 export const signupSchema = z.object({
-  name: z.string().trim().min(2).max(100),
+  name: z.string().trim().min(2, "Name must be at least 2 characters.").max(100),
   email: z.string().trim().email().max(254),
-  password: z.string().min(12).max(128),
+  password: newPasswordSchema,
   role: z.enum(["participant", "organizer"])
 }).strict();
 
 export const loginSchema = z.object({ email: z.string().trim().email().max(254), password: z.string().max(128) }).strict();
 export const dashboardSchema = z.object({ dashboard: z.enum(["participant", "organizer", "admin"]) }).strict();
 export const resetRequestSchema = z.object({ email: z.string().trim().email().max(254) }).strict();
-export const resetConfirmSchema = z.object({ token: z.string().min(32), password: z.string().min(12).max(128) }).strict();
-export const changePasswordSchema = z.object({ currentPassword: z.string().max(128), newPassword: z.string().min(12).max(128) }).strict();
+export const resetConfirmSchema = z.object({ token: z.string().min(32), password: newPasswordSchema }).strict();
+export const changePasswordSchema = z.object({ currentPassword: z.string().max(128), newPassword: newPasswordSchema }).strict();
 
 const optionalUrl = z.union([z.string().trim().url().max(2048).refine((value) => /^https?:\/\//i.test(value), "Only HTTP(S) URLs are allowed"), z.literal("")]);
 const isoDate = z.string().datetime({ offset: true });

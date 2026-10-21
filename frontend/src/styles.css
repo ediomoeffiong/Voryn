@@ -1091,6 +1091,11 @@ button {
   color: var(--red);
 }
 
+.form-hint {
+  color: var(--ink-secondary);
+  line-height: 1.45;
+}
+
 .solid-dark,
 .table-actions button,
 .portal-row button,

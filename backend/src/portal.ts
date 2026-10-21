@@ -4,7 +4,7 @@ import { addEventToStore, cities, events as cachedEvents, organizers as cachedOr
 import type { Event, EventStatus } from "./domain.js";
 import { prisma } from "./db.js";
 import { asyncHandler, HttpError } from "./http.js";
-import { createOpaqueToken, createTicketCode, hashPassword, hashToken, isPasswordHash, normalizeEmail, validatePassword, verifyPassword } from "./security.js";
+import { createOpaqueToken, createTicketCode, hashPassword, hashToken, isPasswordHash, normalizeEmail, validatePassword, verifyLegacyPassword, verifyPassword } from "./security.js";
 import { slugify, uniqueSlug } from "./slug.js";
 import { announcementSchema, changePasswordSchema, dashboardSchema, eventCreateSchema, eventUpdateSchema, lifecycleSchema, loginSchema, organizerProfileSchema, profileSchema, resetConfirmSchema, resetRequestSchema, reviewSchema, signupSchema } from "./validation.js";
 import { createSession, currentUser, requireAdmin, requireAuth, requireEventOwnership, requireOrganizationPermission, requireOrganizer, requireParticipantAccess, revokeSession, safeUser } from "./auth.js";
@@ -228,12 +228,19 @@ export function registerPortalRoutes(app: Express) {
 
   const login = asyncHandler(async (request, response) => {
     const input = loginSchema.parse(request.body);
-    const user = await prisma.user.findUnique({ where: { email: normalizeEmail(input.email) } });
-    if (!user || !isPasswordHash(user.passwordHash) || !(await verifyPassword(input.password, user.passwordHash))) {
-      if (user && !isPasswordHash(user.passwordHash)) await prisma.user.update({ where: { id: user.id }, data: { passwordResetRequired: true } });
-      throw new HttpError(401, "Invalid email or password");
-    }
+    let user = await prisma.user.findUnique({ where: { email: normalizeEmail(input.email) } });
+    const hasCurrentHash = Boolean(user && isPasswordHash(user.passwordHash));
+    const passwordMatches = Boolean(user && (hasCurrentHash
+      ? await verifyPassword(input.password, user.passwordHash)
+      : verifyLegacyPassword(input.password, user.passwordHash)));
+    if (!user || !passwordMatches) throw new HttpError(401, "Invalid email or password");
     if (request.path.includes("/admin/") !== (user.role === "admin")) throw new HttpError(401, "Invalid email or password");
+    if (!hasCurrentHash) {
+      user = await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: await hashPassword(input.password), passwordResetRequired: false }
+      });
+    }
     await revokeSession(request, response);
     await createSession(response, user.id);
     response.json({ user: safeUser(user) });
