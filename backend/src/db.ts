@@ -9,6 +9,11 @@ export function isDatabaseReady() {
   return ready;
 }
 
+function writeErrorMessage(value: unknown) {
+  try { return JSON.stringify(value); }
+  catch { return String(value); }
+}
+
 // Legacy records may contain explicit null timestamps. Prisma's @default(now())
 // only applies to new writes, so these must be repaired before typed reads.
 async function repairLegacyTimestamps() {
@@ -25,7 +30,7 @@ async function repairLegacyTimestamps() {
           : [])
       ]
     }) as { nModified?: number; writeErrors?: unknown[] };
-    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} timestamp repair failed`);
+    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} timestamp repair failed: ${writeErrorMessage(result.writeErrors)}`);
     if (result.nModified) console.info(`Repaired ${result.nModified} legacy ${collection} timestamp records`);
   }
 }
@@ -40,7 +45,7 @@ async function repairLegacyRequiredDefaults() {
   for (const { collection, values } of defaults) {
     const updates = Object.entries(values).map(([field, value]) => ({ q: { [field]: null }, u: { $set: { [field]: value } }, multi: true }));
     const result = await prisma.$runCommandRaw({ update: collection, updates }) as { nModified?: number; writeErrors?: unknown[] };
-    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} default repair failed`);
+    if (result.writeErrors?.length) throw new Error(`Legacy ${collection} default repair failed: ${writeErrorMessage(result.writeErrors)}`);
     if (result.nModified) console.info(`Repaired ${result.nModified} legacy ${collection} default fields`);
   }
 }
@@ -70,14 +75,18 @@ async function seedDevelopmentFixtures() {
 
 export async function initDb() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+  console.info("Database startup: connecting");
   await prisma.$connect();
   await prisma.$runCommandRaw({ ping: 1 });
+  console.info("Database startup: repairing legacy records");
   await repairLegacyTimestamps();
   await repairLegacyRequiredDefaults();
   await seedDevelopmentFixtures();
+  console.info("Database startup: loading application data");
   const [dbCities, dbOrganizers, dbEvents] = await Promise.all([prisma.city.findMany(), prisma.organizer.findMany(), prisma.event.findMany()]);
   hydrate(dbCities, dbOrganizers, dbEvents);
   ready = true;
+  console.info("Database startup: ready");
 }
 
 export async function disconnectDb() {

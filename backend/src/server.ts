@@ -121,8 +121,11 @@ export function createApp() {
 
 export async function startServer() {
   await initDb();
+  console.info("Server startup: validating configuration");
   const app = createApp();
-  const server = app.listen(Number(process.env.PORT ?? 4000), () => console.log(`Voryn API listening on port ${process.env.PORT ?? 4000}`));
+  const port = Number(process.env.PORT ?? 4000);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT must be an integer between 1 and 65535");
+  const server = app.listen(port, "0.0.0.0", () => console.log(`Voryn API listening on port ${port}`));
   const shutdown = async (signal: string) => { console.log(`${signal}: shutting down`); server.close(async () => { await disconnectDb(); process.exit(0); }); };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));
@@ -130,5 +133,9 @@ export async function startServer() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  startServer().catch((error) => { console.error("Voryn failed to start", error instanceof Error ? error.message : error); process.exit(1); });
+  startServer().catch((error) => {
+    console.error("Voryn failed to start");
+    console.error(error instanceof Error ? error.stack ?? error.message : error);
+    process.exit(1);
+  });
 }
