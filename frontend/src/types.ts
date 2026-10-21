@@ -1,4 +1,4 @@
-export type EventStatus = "draft" | "published" | "sold-out" | "cancelled" | "completed";
+export type EventStatus = "draft" | "scheduled" | "published" | "sold-out" | "cancelled" | "completed" | "archived" | "trashed";
 export type DiscoveryMode = "local" | "online" | "global";
 export type EventBadge = "featured" | "trending" | "recommended" | "editors-pick" | "popular" | "recently-added";
 export type Interest =
@@ -73,7 +73,42 @@ export type Event = {
   ticketSalesCount: number;
   badges: EventBadge[];
   priceLabel: string;
+  shortSummary: string;
+  descriptionHtml: string;
+  tags: string[];
+  language: string;
+  targetAudience: string;
+  visibility: "public" | "unlisted";
+  attendanceFormat: "physical" | "online" | "hybrid";
+  endsAt: string | null;
+  timezone: string;
+  schedule: EventSession[];
+  recurrence: { rule: string; exceptions: string[] } | null;
+  location: EventLocation;
+  registration: RegistrationSettings;
+  tickets: TicketType[];
+  faqs: EventFAQ[];
+  speakers: EventSpeaker[];
+  advancedSettings: AdvancedEventSettings;
+  capacity: number | null;
+  reservedCount: number;
+  publishAt: string | null;
+  publishedAt: string | null;
+  cancelledAt: string | null;
+  cancellationReason?: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 };
+
+export type EventSession = { id: string; title: string; description: string; startsAt: string; endsAt: string; speakerId?: string; location: string; type: "session" | "keynote" | "workshop" | "panel" | "break" | "networking" | "other"; track: string; sortOrder: number };
+export type EventLocation = { format: "physical" | "online" | "hybrid"; venueName: string; address: string; city: string; region: string; country: string; countryCode: string; postalCode: string; latitude?: number | null; longitude?: number | null; directions: string; accessibility: string; meetingPlatform: string; meetingUrl?: string; joiningInstructions?: string; accessRestriction?: string; revealAfterRegistration: boolean; physicalCapacity?: number | null; virtualCapacity?: number | null };
+export type RegistrationQuestion = { id: string; label: string; type: "short_text" | "long_text" | "multiple_choice" | "checkboxes" | "dropdown" | "yes_no"; required: boolean; options: string[]; sortOrder: number };
+export type RegistrationSettings = { mode: "free" | "paid" | "invite_only" | "approval" | "disabled"; opensAt?: string | null; closesAt?: string | null; accountRequired: boolean; approvalRequired: boolean; waitlistEnabled: boolean; cancellationDeadline?: string | null; confirmationMessage: string; questions: RegistrationQuestion[] };
+export type TicketType = { id?: string; name: string; description: string; currency: string; priceMinor: number; capacity?: number | null; reservedCount?: number; minPerOrder: number; maxPerOrder: number; salesOpenAt?: string | null; salesCloseAt?: string | null; visibility: "public" | "hidden"; availability: "available" | "paused"; eligibility?: string; sortOrder: number };
+export type EventFAQ = { id: string; question: string; answer: string; sortOrder: number };
+export type EventSpeaker = { id: string; name: string; role: string; biography: string; photo: string; organization: string; socialLinks: string[] };
+export type AdvancedEventSettings = { contactEmail: string; contactPhone: string; website: string; rules: string; minimumAge?: number | null; accessibility: string; refundPolicy: string; cancellationPolicy: string; terms: string; socialSharing: boolean; communicationOptIn: boolean };
 
 export type HomePayload = {
   heroEvent: Event;
@@ -129,6 +164,10 @@ export type Registration = {
   checkedIn: boolean;
   ticketCode: string;
   reminders: Reminder[];
+  quantity: number;
+  ticketTypeId?: string;
+  approvalStatus: "pending" | "approved" | "rejected";
+  paymentStatus: "not_required" | "pending" | "verified" | "failed";
 };
 
 export type Reminder = {

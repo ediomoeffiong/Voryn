@@ -14,6 +14,9 @@ import { getNavigation, globalEvents, interests, localEventsForCountry, nearbyEv
 import { currentUser, registerForEvent, registerPortalRoutes } from "./portal.js";
 import { eventJsonLd } from "./seo.js";
 import { searchEvents } from "./search.js";
+import { publicEvent, ticketsFor } from "./events.js";
+import { publishDueEvents } from "./scheduler.js";
+import { serveMedia } from "./media.js";
 
 function allowedOrigins() {
   const configured = (process.env.CORS_ORIGIN ?? (process.env.NODE_ENV === "production" ? "" : "http://localhost:5173")).split(",").map((value) => value.trim()).filter(Boolean);
@@ -29,6 +32,11 @@ export function createApp() {
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
   app.use(cors({ origin(origin, callback) { if (!origin || origins.includes(origin)) return callback(null, true); callback(new HttpError(403, "CORS origin denied")); }, credentials: true, methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"], allowedHeaders: ["Content-Type", "X-CSRF-Token"] }));
   app.use(express.json({ limit: "1mb" }));
+  app.post("/api/internal/publish-due", asyncHandler(async (request, response) => {
+    const configured = process.env.SCHEDULER_SECRET;
+    if (!configured || request.header("authorization") !== `Bearer ${configured}`) throw new HttpError(401, "Invalid scheduler credentials");
+    response.json(await publishDueEvents());
+  }));
   app.use(cookieParser());
   app.get("/api/auth/csrf", issueCsrfToken);
   app.use(attachUser);
@@ -39,6 +47,7 @@ export function createApp() {
   registerPortalRoutes(app);
 
   app.get("/api/health", (_request, response) => response.json({ ok: true, service: "voryn-api" }));
+  app.get("/api/media/files/:key", asyncHandler(serveMedia));
   app.get("/api/ready", asyncHandler(async (_request, response) => {
     if (!isDatabaseReady()) return response.status(503).json({ ready: false });
     try { await prisma.$runCommandRaw({ ping: 1 }); response.json({ ready: true }); }
@@ -58,20 +67,24 @@ export function createApp() {
     response.json(publicEvents.filter((event) => (!status || event.status === status) && (!city || event.citySlug === city) && (!mode || event.mode === mode)));
   });
   app.get("/api/events/:slug", asyncHandler(async (request, response) => {
-    const dbEvent = await prisma.event.findUnique({ where: { slug: String(request.params.slug) } });
+    let dbEvent = await prisma.event.findUnique({ where: { slug: String(request.params.slug) } });
+    if (!dbEvent) {
+      const redirected = await prisma.event.findFirst({ where: { previousSlugs: { has: String(request.params.slug) }, deletedAt: null } });
+      if (redirected) return response.redirect(308, `/api/events/${redirected.slug}`);
+    }
     if (!dbEvent || dbEvent.deletedAt) throw new HttpError(404, "Event not found");
     const user = await currentUser(request);
-    const canSeeUnpublished = dbEvent.status !== "draft" || (user?.role === "organizer" && user.organizerSlug === dbEvent.organizerSlug) || user?.role === "admin";
-    if (!canSeeUnpublished) throw new HttpError(404, "Event not found");
-    const event = publicEvents.find((item) => item.slug === dbEvent.slug) ?? {
-      id: dbEvent.id, title: dbEvent.title, slug: dbEvent.slug, summary: dbEvent.summary, category: dbEvent.category, type: dbEvent.type, mode: dbEvent.mode, status: dbEvent.status, startsAt: dbEvent.startsAt, venue: dbEvent.venue, citySlug: dbEvent.citySlug, country: dbEvent.country, organizerSlug: dbEvent.organizerSlug, media: dbEvent.media, attendeeCount: dbEvent.attendeeCount, rsvpCount: dbEvent.rsvpCount, ticketSalesCount: dbEvent.ticketSalesCount, badges: dbEvent.badges, priceLabel: dbEvent.priceLabel
-    };
+    const owner = (user?.role === "organizer" && user.organizerSlug === dbEvent.organizerSlug) || user?.role === "admin";
+    const publiclyReachable = dbEvent.status === "published" || dbEvent.status === "cancelled" || dbEvent.status === "completed";
+    if (!publiclyReachable && !owner) throw new HttpError(404, "Event not found");
+    const isRegistered = user ? Boolean(await prisma.registration.findFirst({ where: { userId: user.id, eventSlug: dbEvent.slug, status: "active" } })) : false;
+    const allTickets = await ticketsFor(dbEvent.id);
+    const event = publicEvent(dbEvent, owner ? allTickets : allTickets.filter((ticket) => ticket.visibility === "public"), owner || isRegistered);
     const related = publicEvents.filter((item) => item.slug !== event.slug && item.category === event.category).slice(0, 3);
-    const isRegistered = user ? Boolean(await prisma.registration.findFirst({ where: { userId: user.id, eventSlug: event.slug, status: "active" } })) : false;
     response.json({ event, jsonLd: eventJsonLd(event as never), related, isRegistered });
   }));
   app.post("/api/events/:slug/rsvp", requireParticipantAccess, asyncHandler(async (request, response) => {
-    const registration = await registerForEvent(response.locals.user as User, String(request.params.slug));
+    const registration = await registerForEvent(response.locals.user as User, String(request.params.slug), request.body ?? {});
     response.status(201).json({ registration, action: "reserved" });
   }));
   app.get("/api/cities", (_request, response) => response.json(cities));

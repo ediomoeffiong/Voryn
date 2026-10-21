@@ -12,6 +12,8 @@
     "admin:bootstrap": "tsx src/scripts/bootstrap-admin.ts --confirm",
     "migrate:stage1:dry-run": "tsx src/scripts/migrate-stage1.ts",
     "migrate:stage1": "tsx src/scripts/migrate-stage1.ts --apply"
+    ,"migrate:stage2:dry-run": "tsx src/scripts/migrate-stage2.ts"
+    ,"migrate:stage2": "tsx src/scripts/migrate-stage2.ts --apply"
   },
   "dependencies": {
     "@prisma/client": "^5.16.1",
@@ -22,14 +24,19 @@
     "cors": "^2.8.5",
     "express": "^4.21.2",
     "express-rate-limit": "^8.7.1",
+    "file-type": "^22.2.0",
     "helmet": "^8.3.0",
+    "multer": "^2.4.0",
     "prisma": "^5.16.1",
+    "sanitize-html": "^2.18.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
+    "@types/multer": "^2.3.0",
+    "@types/sanitize-html": "^2.16.2",
     "@types/supertest": "^7.2.1",
     "supertest": "^7.3.1",
     "vitest": "^5.0.5"

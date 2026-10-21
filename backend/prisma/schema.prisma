@@ -56,12 +56,89 @@ model Event {
   priceLabel       String
   capacity         Int?
   reservedCount    Int       @default(0)
+  descriptionHtml  String?
+  shortSummary     String?
+  tags             String[]  @default([])
+  language         String?   @default("en")
+  targetAudience   String?
+  visibility       String    @default("public")
+  attendanceFormat String?   @default("physical")
+  endsAt           DateTime?
+  timezone         String?   @default("UTC")
+  schedule         Json?
+  recurrence       Json?
+  location         Json?
+  registration     Json?
+  faqs             Json?
+  speakers         Json?
+  advancedSettings Json?
+  publishAt        DateTime?
+  publishedAt      DateTime?
+  cancelledAt      DateTime?
+  cancellationReason String?
+  archivedAt       DateTime?
+  trashedAt        DateTime?
+  previousSlugs    String[]  @default([])
+  version          Int       @default(1)
   deletedAt        DateTime?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
   @@index([organizerSlug, status])
   @@index([citySlug, status])
+  @@index([status, publishAt])
+}
+
+model TicketType {
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId               String   @db.ObjectId
+  name                  String
+  description           String
+  currency              String
+  priceMinor            Int
+  capacity              Int?
+  reservedCount         Int      @default(0)
+  minPerOrder           Int      @default(1)
+  maxPerOrder           Int      @default(1)
+  salesOpenAt           DateTime?
+  salesCloseAt          DateTime?
+  visibility            String   @default("public")
+  availability          String   @default("available")
+  eligibility           String?
+  sortOrder             Int      @default(0)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([eventId, sortOrder])
+}
+
+model EventLifecycleLog {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  eventId   String   @db.ObjectId
+  actorId   String   @db.ObjectId
+  action    String
+  before    Json?
+  after     Json?
+  createdAt DateTime @default(now())
+
+  @@index([eventId, createdAt])
+}
+
+model MediaAsset {
+  id          String   @id @default(auto()) @map("_id") @db.ObjectId
+  ownerId     String   @db.ObjectId
+  eventId     String?  @db.ObjectId
+  storageKey  String   @unique
+  url         String
+  mimeType    String
+  sizeBytes   Int
+  altText     String
+  originalName String
+  createdAt   DateTime @default(now())
+  deletedAt   DateTime?
+
+  @@index([ownerId, createdAt])
+  @@index([eventId])
 }
 
 model User {
@@ -93,6 +170,12 @@ model Registration {
   reminders    Json
   status       String  @default("active")
   cancelledAt  String?
+  eventId      String? @db.ObjectId
+  ticketTypeId String? @db.ObjectId
+  quantity     Int     @default(1)
+  answers      Json?
+  approvalStatus String @default("approved")
+  paymentStatus  String @default("not_required")
 
   @@unique([userId, eventSlug])
   @@index([eventSlug, status])

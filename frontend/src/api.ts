@@ -258,11 +258,19 @@ export function getOrganizerDashboard(token: string) {
   return request<OrganizerDashboard>("/api/portal/organizer", { token });
 }
 
+function eventWritePayload(input: Partial<Event> & { coverImage?: string; heroImage?: string; thumbnail?: string }) {
+  const keys: Array<keyof Event> = ["title","slug","shortSummary","summary","descriptionHtml","category","type","mode","tags","language","targetAudience","visibility","attendanceFormat","status","startsAt","endsAt","timezone","citySlug","venue","country","schedule","recurrence","location","registration","tickets","faqs","speakers","advancedSettings","capacity","priceLabel","publishAt","version"];
+  const payload: Record<string, unknown> = {}; for (const key of keys) if (input[key] !== undefined) payload[key] = input[key];
+  if (input.media) Object.assign(payload, { coverImage: input.media.coverImage, heroImage: input.media.heroImage, thumbnail: input.media.thumbnail, gallery: input.media.gallery, videoTrailer: input.media.videoTrailer });
+  if ((input as unknown as Record<string, unknown>).confirmMajorChange === true) payload.confirmMajorChange = true;
+  return payload;
+}
+
 export function createOrganizerEvent(token: string, input: Partial<Event> & { coverImage?: string; heroImage?: string; thumbnail?: string; priceLabel?: string }) {
   return request<{ event: Event; dashboard: OrganizerDashboard }>("/api/portal/organizer/events", {
     method: "POST",
     token,
-    body: JSON.stringify(input)
+    body: JSON.stringify(eventWritePayload(input))
   });
 }
 
@@ -270,15 +278,30 @@ export function updateOrganizerEvent(token: string, slug: string, input: Partial
   return request<{ event: Event; dashboard: OrganizerDashboard }>(`/api/portal/organizer/events/${slug}`, {
     method: "PUT",
     token,
-    body: JSON.stringify(input)
+    body: JSON.stringify(eventWritePayload(input))
   });
 }
 
-export function deleteOrganizerEvent(token: string, slug: string) {
-  return request<{ dashboard: OrganizerDashboard }>(`/api/portal/organizer/events/${slug}`, {
+export function deleteOrganizerEvent(token: string, slug: string, version: number) {
+  return request<{ dashboard: OrganizerDashboard }>(`/api/portal/organizer/events/${slug}?version=${version}`, {
     method: "DELETE",
     token
   });
+}
+
+export function transitionOrganizerEvent(token: string, slug: string, input: { action: "publish" | "schedule" | "unpublish" | "cancel" | "complete" | "archive" | "trash" | "restore"; version: number; reason?: string; publishAt?: string }) {
+  return request<{ event: Event; dashboard: OrganizerDashboard }>(`/api/portal/organizer/events/${slug}/lifecycle`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export function duplicateOrganizerEvent(token: string, slug: string) {
+  return request<{ event: Event; dashboard: OrganizerDashboard }>(`/api/portal/organizer/events/${slug}/duplicate`, { method: "POST", token });
+}
+
+export async function uploadOrganizerMedia(_token: string, file: File, altText: string, eventId?: string) {
+  const body = new FormData(); body.append("file", file); body.append("altText", altText); if (eventId) body.append("eventId", eventId);
+  const response = await fetch(`${API_BASE}/api/portal/organizer/media`, { method: "POST", credentials: "include", headers: { "X-CSRF-Token": await ensureCsrfToken() }, body });
+  if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error ?? "Media upload failed"); }
+  return response.json() as Promise<{ asset: { id: string; url: string; mimeType: string; sizeBytes: number; altText: string } }>;
 }
 
 export function sendAnnouncement(token: string, input: { eventSlug: string; subject: string; message: string }) {
@@ -287,6 +310,10 @@ export function sendAnnouncement(token: string, input: { eventSlug: string; subj
     token,
     body: JSON.stringify(input)
   });
+}
+
+export function decideRegistration(token: string, id: string, decision: "approved" | "rejected") {
+  return request<{ dashboard: OrganizerDashboard }>(`/api/portal/organizer/registrations/${id}/approval`, { method: "POST", token, body: JSON.stringify({ decision }) });
 }
 
 export function updateOrganizerProfile(token: string, input: { name: string; organizerName: string; bio: string; website: string; profileImage?: string }) {

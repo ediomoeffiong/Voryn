@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@prisma/client";
 import { cities, organizers, events, syncPublicEvents } from "./data.js";
 import type { City, Event, Organizer } from "./domain.js";
 
@@ -18,7 +18,8 @@ function hydrate(dbCities: Awaited<ReturnType<typeof prisma.city.findMany>>, dbO
     status: event.status as Event["status"], startsAt: event.startsAt, venue: event.venue, citySlug: event.citySlug,
     country: event.country, organizerSlug: event.organizerSlug, media: event.media as Event["media"],
     attendeeCount: event.attendeeCount, rsvpCount: event.rsvpCount, ticketSalesCount: event.ticketSalesCount,
-    badges: event.badges as Event["badges"], priceLabel: event.priceLabel
+    badges: event.badges as Event["badges"], priceLabel: event.priceLabel, visibility: event.visibility as Event["visibility"], attendanceFormat: event.attendanceFormat as Event["attendanceFormat"],
+    endsAt: event.endsAt?.toISOString() ?? null, timezone: event.timezone ?? "UTC", tags: event.tags, descriptionHtml: event.descriptionHtml ?? "", shortSummary: event.shortSummary ?? event.summary, version: event.version
   })));
   syncPublicEvents();
 }
@@ -28,7 +29,7 @@ async function seedDevelopmentFixtures() {
   const [cityCount, organizerCount, eventCount] = await Promise.all([prisma.city.count(), prisma.organizer.count(), prisma.event.count()]);
   if (cityCount === 0) for (const { id: _id, ...city } of cities) await prisma.city.create({ data: city });
   if (organizerCount === 0) for (const { id: _id, ...organizer } of organizers) await prisma.organizer.create({ data: organizer });
-  if (eventCount === 0) for (const { id: _id, ...event } of events) await prisma.event.create({ data: { ...event, reservedCount: 0 } });
+  if (eventCount === 0) for (const { id: _id, ...event } of events) await prisma.event.create({ data: { ...event, reservedCount: 0 } as Prisma.EventCreateInput });
 }
 
 export async function initDb() {

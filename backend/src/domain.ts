@@ -1,4 +1,4 @@
-export type EventStatus = "draft" | "published" | "sold-out" | "cancelled" | "completed";
+export type EventStatus = "draft" | "scheduled" | "published" | "sold-out" | "cancelled" | "completed" | "archived" | "trashed";
 export type DiscoveryMode = "local" | "online" | "global";
 export type EventType = "conference" | "workshop" | "meetup" | "festival" | "webinar" | "summit";
 export type EventBadge = "featured" | "trending" | "recommended" | "editors-pick" | "popular" | "recently-added";
@@ -74,4 +74,18 @@ export type Event = {
   ticketSalesCount: number;
   badges: EventBadge[];
   priceLabel: string;
+  shortSummary?: string;
+  descriptionHtml?: string;
+  visibility?: "public" | "unlisted";
+  attendanceFormat?: "physical" | "online" | "hybrid";
+  endsAt?: string | null;
+  timezone?: string;
+  tags?: string[];
+  schedule?: unknown[];
+  location?: Record<string, unknown>;
+  registration?: Record<string, unknown>;
+  tickets?: unknown[];
+  faqs?: unknown[];
+  speakers?: unknown[];
+  version?: number;
 };

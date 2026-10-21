@@ -42,7 +42,9 @@ import {
   changePassword,
   confirmPasswordReset,
   createOrganizerEvent,
+  decideRegistration,
   deleteOrganizerEvent,
+  duplicateOrganizerEvent,
   downloadTicket,
   exportAttendees,
   favoriteEvent,
@@ -64,6 +66,7 @@ import {
   sendAnnouncement,
   signup,
   switchDashboard,
+  transitionOrganizerEvent,
   updateNotifications,
   updateOrganizerEvent,
   updateOrganizerProfile,
@@ -87,6 +90,7 @@ import type {
   Role,
   User
 } from "./types";
+import { EventBuilder } from "./EventBuilder";
 
 const toBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -871,9 +875,11 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
   const canUseAttendeeActions = Boolean(auth.user && auth.token && auth.user.role !== "admin");
   const shownEvent = liveEvent.slug === event.slug ? liveEvent : event;
   const isCancelled = event.status === "cancelled";
-  const isSoldOut = event.status === "sold-out";
+  const isSoldOut = event.status === "sold-out" || (event.capacity !== null && event.capacity !== undefined && event.reservedCount >= event.capacity);
+  const registrationMode = event.registration?.mode ?? "free";
+  const registrationDisabled = isCancelled || isSoldOut || registrationMode === "disabled" || registrationMode === "paid";
   const calendarStart = new Date(shownEvent.startsAt);
-  const calendarEnd = new Date(calendarStart.getTime() + 2 * 60 * 60 * 1000);
+  const calendarEnd = shownEvent.endsAt ? new Date(shownEvent.endsAt) : new Date(calendarStart.getTime() + 2 * 60 * 60 * 1000);
   const calendarStamp = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
   const googleCalendar = `https://calendar.google.com/calendar/render?${new URLSearchParams({
     action: "TEMPLATE",
@@ -909,7 +915,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             <span className={`status-pill ${shownEvent.status}`}>{shownEvent.status.replace("-", " ")}</span>
             <strong>{shownEvent.priceLabel}</strong>
             <button
-              disabled={isCancelled}
+              disabled={registrationDisabled && !isRegistered}
               onClick={async () => {
                 if (canUseAttendeeActions && auth.token) {
                   if (isRegistered) {
@@ -930,7 +936,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               }}
             >
               {isRegistered ? <XCircle size={18} /> : <Ticket size={18} />}
-              {isCancelled ? "Cancelled" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : isSoldOut ? "Join waitlist" : "Reserve spot"}
+              {isCancelled ? "Cancelled" : registrationMode === "paid" ? "Checkout coming soon" : registrationMode === "disabled" ? "Registration closed" : isSoldOut ? "Sold out" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : "Reserve spot"}
             </button>
             {canUseAttendeeActions && auth.token ? (
               auth.user?.favorites.includes(shownEvent.slug) ? (
@@ -990,9 +996,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
         <div className="event-story">
           <img src={shownEvent.media.coverImage} alt="" />
           <h2>Why this room matters</h2>
-          <p>
-            {shownEvent.summary} Expect curated sessions, visible community momentum, and a setting designed for people who want more than a calendar listing.
-          </p>
+          {shownEvent.descriptionHtml ? <div className="rich-description" dangerouslySetInnerHTML={{ __html: shownEvent.descriptionHtml }} /> : <p>{shownEvent.summary}</p>}
           <div className="media-slots">
             {shownEvent.media.gallery && shownEvent.media.gallery.length > 0 ? (
               <ImageSlider images={shownEvent.media.gallery} />
@@ -1022,6 +1026,14 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
           </span>
         </aside>
       </section>
+
+      {shownEvent.schedule?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>Agenda</span><h2>Plan your experience.</h2></div><div className="agenda-list">{shownEvent.schedule.map((session) => <article key={session.id}><time>{new Date(session.startsAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</time><div><span>{session.type} · {session.track}</span><h3>{session.title}</h3><p>{session.description}</p>{session.location ? <small>{session.location}</small> : null}</div></article>)}</div></section> : null}
+
+      {shownEvent.speakers?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>Speakers</span><h2>Meet the people on stage.</h2></div><div className="speaker-grid">{shownEvent.speakers.map((speaker) => <article key={speaker.id}>{speaker.photo ? <img src={speaker.photo} alt={speaker.name} loading="lazy"/> : null}<h3>{speaker.name}</h3><strong>{speaker.role}{speaker.organization ? ` · ${speaker.organization}` : ""}</strong><p>{speaker.biography}</p></article>)}</div></section> : null}
+
+      {shownEvent.tickets?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>Access</span><h2>Choose your ticket.</h2></div><div className="ticket-grid">{shownEvent.tickets.map((ticket) => <article key={ticket.id ?? ticket.name}><h3>{ticket.name}</h3><strong>{ticket.priceMinor ? `${ticket.currency} ${(ticket.priceMinor / 100).toLocaleString()}` : "Free"}</strong><p>{ticket.description}</p><small>{ticket.capacity ? `${Math.max(0, ticket.capacity - (ticket.reservedCount ?? 0))} remaining` : "No fixed limit"}</small></article>)}</div></section> : null}
+
+      {shownEvent.faqs?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>FAQ</span><h2>Good to know.</h2></div><div className="faq-list">{shownEvent.faqs.map((faq) => <details key={faq.id}><summary>{faq.question}</summary><p>{faq.answer}</p></details>)}</div></section> : null}
 
       {related.length ? (
         <section className="section-wrap">
@@ -1370,7 +1382,15 @@ function OrganizerDashboardPage() {
 function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
   const [tab, setTab] = useState("Overview");
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const [editingEvent, setEditingEvent] = useState<Event | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
+  const [eventSearch, setEventSearch] = useState("");
+  const [eventStatusFilter, setEventStatusFilter] = useState("all");
+  const [eventCategoryFilter, setEventCategoryFilter] = useState("all");
+  const [eventDateFilter, setEventDateFilter] = useState("all");
+  const [eventSort, setEventSort] = useState("updated");
+  const [eventPage, setEventPage] = useState(1);
+  const [eventView, setEventView] = useState<"list" | "cards">("list");
   const [draft, setDraft] = useState({
     title: "New Voryn Event",
     citySlug: "lagos",
@@ -1409,14 +1429,14 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
 
   if (loading) return <LoadingScreen />;
   if (error || !data) return <ErrorState message={error ?? "Dashboard unavailable"} />;
+  const filteredEvents = data.events.filter((event) => (eventStatusFilter === "all" || event.status === eventStatusFilter) && (eventCategoryFilter === "all" || event.category === eventCategoryFilter) && (eventDateFilter === "all" || (eventDateFilter === "upcoming" ? new Date(event.startsAt) >= new Date() : new Date(event.startsAt) < new Date())) && `${event.title} ${event.category}`.toLowerCase().includes(eventSearch.toLowerCase())).sort((a, b) => eventSort === "date" ? new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime() : eventSort === "title" ? a.title.localeCompare(b.title) : new Date(b.updatedAt ?? b.startsAt).getTime() - new Date(a.updatedAt ?? a.startsAt).getTime());
+  const pageSize = 8; const eventPageCount = Math.max(1, Math.ceil(filteredEvents.length / pageSize)); const pagedEvents = filteredEvents.slice((Math.min(eventPage, eventPageCount) - 1) * pageSize, Math.min(eventPage, eventPageCount) * pageSize);
 
   const saveEvent = async (event: React.FormEvent) => {
     event.preventDefault();
     if (editingSlug) await updateOrganizerEvent(token, editingSlug, draft);
     else await createOrganizerEvent(token, draft);
-    setEditingSlug(null);
-    setRefreshKey((value) => value + 1);
-    setTab("My Events");
+    setEditingSlug(null); setRefreshKey((value) => value + 1); setTab("My Events");
   };
 
   const announce = async () => {
@@ -1447,7 +1467,7 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
       {user.role !== "admin" ? <FloatingDashboardSwitch active="organizer" token={token} setAuth={setAuth} /> : null}
       <aside className="dashboard-sidebar">
         {tabs.map((item) => (
-          <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)}>
+          <button className={tab === item ? "active" : ""} key={item} onClick={() => { if (item === "Create Event") { setEditingEvent(undefined); setEditingSlug(null); } setTab(item); }}>
             {item}
           </button>
         ))}
@@ -1470,6 +1490,12 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
         {tab === "My Events" ? (
           <div className="portal-card">
             <div className="table-actions">
+              <input aria-label="Search events" value={eventSearch} onChange={(event) => setEventSearch(event.target.value)} placeholder="Search events" />
+              <select aria-label="Filter by status" value={eventStatusFilter} onChange={(event) => setEventStatusFilter(event.target.value)}><option value="all">All statuses</option>{["draft","scheduled","published","cancelled","completed","archived","trashed"].map((status) => <option key={status}>{status}</option>)}</select>
+              <select aria-label="Filter by category" value={eventCategoryFilter} onChange={(event) => setEventCategoryFilter(event.target.value)}><option value="all">All categories</option>{[...new Set(data.events.map((item) => item.category))].map((category) => <option key={category}>{category}</option>)}</select>
+              <select aria-label="Filter by date" value={eventDateFilter} onChange={(event) => setEventDateFilter(event.target.value)}><option value="all">Any date</option><option value="upcoming">Upcoming</option><option value="past">Past</option></select>
+              <select aria-label="Sort events" value={eventSort} onChange={(event) => setEventSort(event.target.value)}><option value="updated">Recently updated</option><option value="date">Event date</option><option value="title">Title</option></select>
+              <button onClick={() => setEventView((view) => view === "list" ? "cards" : "list")}>{eventView === "list" ? "Card view" : "List view"}</button>
               <button onClick={announce}>
                 <Mail size={17} /> Send announcement
               </button>
@@ -1477,14 +1503,21 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
                 <Download size={17} /> Export attendees
               </button>
             </div>
-            <div className="portal-table">
-              {data.events.map((event) => (
+            <div className={`portal-table event-manager-${eventView}`}>
+              {pagedEvents.map((event) => (
                 <div className="portal-row" key={event.id}>
+                  <img className="event-row-cover" src={event.media.coverImage || event.media.thumbnail} alt="" loading="lazy" />
                   <strong>{event.title}</strong>
                   <span>{event.category}</span>
                   <span>{event.status}</span>
                   <span>{event.attendeeCount.toLocaleString()} attendees</span>
-                  <button
+                  <Link to={`/events/${event.slug}`} aria-label={`View ${event.title}`}><ExternalLink size={16} /></Link>
+                  <button aria-label={`Duplicate ${event.title}`} onClick={async () => { await duplicateOrganizerEvent(token, event.slug); setRefreshKey((value) => value + 1); }}><Plus size={16} /></button>
+                  {event.status === "draft" ? <button aria-label={`Publish ${event.title}`} onClick={async () => { await transitionOrganizerEvent(token, event.slug, { action: "publish", version: event.version }); setRefreshKey((value) => value + 1); }}><CheckCircle2 size={16} /></button> : null}
+                  {event.status === "published" ? <button aria-label={`Unpublish ${event.title}`} onClick={async () => { if (!window.confirm("Unpublish this event?")) return; await transitionOrganizerEvent(token, event.slug, { action: "unpublish", version: event.version }); setRefreshKey((value) => value + 1); }}><XCircle size={16} /></button> : null}
+                  {event.status === "trashed" ? <button aria-label={`Restore ${event.title}`} onClick={async () => { await transitionOrganizerEvent(token, event.slug, { action: "restore", version: event.version }); setRefreshKey((value) => value + 1); }}><ArrowRight size={16} /></button> : null}
+                  <select aria-label={`Lifecycle actions for ${event.title}`} defaultValue="" onChange={async (choice) => { const action = choice.target.value as "publish" | "unpublish" | "cancel" | "complete" | "archive"; choice.target.value = ""; if (!action) return; if (!window.confirm(`${action[0].toUpperCase() + action.slice(1)} “${event.title}”?`)) return; const reason = action === "cancel" ? window.prompt("Optional cancellation reason") ?? undefined : undefined; await transitionOrganizerEvent(token, event.slug, { action, version: event.version, reason }); setRefreshKey((value) => value + 1); }}><option value="">More…</option>{event.status === "scheduled" ? <><option value="publish">Publish now</option><option value="unpublish">Return to draft</option></> : null}{event.status === "published" ? <><option value="cancel">Cancel event</option><option value="complete">Mark completed</option></> : null}{event.status === "cancelled" || event.status === "completed" ? <option value="archive">Archive</option> : null}</select>
+                  {event.status !== "trashed" ? <button
                     onClick={async () => {
                       setDraft({
                         title: event.title, citySlug: event.citySlug, category: event.category, status: event.status,
@@ -1493,26 +1526,39 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
                         gallery: event.media.gallery ?? []
                       });
                       setEditingSlug(event.slug);
+                      setEditingEvent(event);
                       setTab("Create Event");
                     }}
                   >
                     <Edit3 size={16} />
-                  </button>
-                  <button
+                  </button> : null}
+                  {["draft", "scheduled", "archived"].includes(event.status) ? <button
                     onClick={async () => {
-                      await deleteOrganizerEvent(token, event.slug);
+                      if (!window.confirm(`Move “${event.title}” to trash?`)) return;
+                      await transitionOrganizerEvent(token, event.slug, { action: "trash", version: event.version });
                       setRefreshKey((value) => value + 1);
                     }}
                   >
                     <Trash2 size={16} />
-                  </button>
+                  </button> : null}
                 </div>
               ))}
+              {!pagedEvents.length ? <div className="empty-state"><CalendarDays size={28}/><strong>No events match these filters.</strong></div> : null}
             </div>
+            <div className="pagination"><button disabled={eventPage <= 1} onClick={() => setEventPage((page) => Math.max(1, page - 1))}>Previous</button><span>Page {Math.min(eventPage, eventPageCount)} of {eventPageCount}</span><button disabled={eventPage >= eventPageCount} onClick={() => setEventPage((page) => Math.min(eventPageCount, page + 1))}>Next</button></div>
           </div>
         ) : null}
 
         {tab === "Create Event" ? (
+          <EventBuilder
+            token={token}
+            initial={editingEvent}
+            onSaved={(event) => { setEditingEvent(event); setEditingSlug(event.slug); setRefreshKey((value) => value + 1); }}
+            onExit={() => { setEditingEvent(undefined); setEditingSlug(null); setTab("My Events"); setRefreshKey((value) => value + 1); }}
+          />
+        ) : null}
+
+        {tab === "Legacy Create Event" ? (
           <form className="portal-card form-grid" onSubmit={saveEvent}>
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="Title" />
             <select value={draft.citySlug} onChange={(event) => setDraft({ ...draft, citySlug: event.target.value })}>
@@ -1686,6 +1732,8 @@ function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: st
                 <span>{attendee.user.email}</span>
                 <span>{attendee.eventSlug}</span>
                 <span>{attendee.ticketCode}</span>
+                <span>{attendee.approvalStatus}</span>
+                {attendee.approvalStatus === "pending" ? <><button onClick={async () => { await decideRegistration(token, attendee.id, "approved"); setRefreshKey((value) => value + 1); }}>Approve</button><button onClick={async () => { if (!window.confirm("Reject this registration and release its capacity?")) return; await decideRegistration(token, attendee.id, "rejected"); setRefreshKey((value) => value + 1); }}>Reject</button></> : null}
               </div>
             )) : <span>No registrations yet.</span>}
           </div>

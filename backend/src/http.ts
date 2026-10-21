@@ -12,6 +12,10 @@ export const asyncHandler = (handler: RequestHandler): RequestHandler => (reques
 };
 
 export const errorHandler: ErrorRequestHandler = (error, _request, response, _next) => {
+  if (error && typeof error === "object" && "name" in error && error.name === "MulterError") {
+    response.status(413).json({ error: "Media upload exceeds the configured limits" });
+    return;
+  }
   if (error instanceof ZodError) {
     response.status(422).json({ error: "Validation failed", issues: error.issues.map(({ path, message }) => ({ path, message })) });
     return;

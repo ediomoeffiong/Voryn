@@ -390,19 +390,19 @@ export const publicEvents: Event[] = [];
 
 export function syncPublicEvents() {
   publicEvents.length = 0;
-  publicEvents.push(...events.filter((event) => event.status !== "draft"));
+  publicEvents.push(...events.filter((event) => (event.status === "published" || event.status === "sold-out") && event.visibility !== "unlisted"));
 }
 
 export function addEventToStore(event: Event) {
   events.push(event);
-  if (event.status !== "draft") {
+  if ((event.status === "published" || event.status === "sold-out") && event.visibility !== "unlisted") {
     publicEvents.push(event);
   }
 }
 
 export function updateEventVisibility(event: Event) {
   const index = publicEvents.findIndex((item) => item.slug === event.slug);
-  if (event.status !== "draft") {
+  if ((event.status === "published" || event.status === "sold-out") && event.visibility !== "unlisted") {
     if (index === -1) publicEvents.push(event);
   } else if (index !== -1) {
     publicEvents.splice(index, 1);
