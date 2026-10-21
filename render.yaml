@@ -12,7 +12,13 @@ services:
       - key: DATABASE_URL
         sync: false # User will provide their MongoDB connection string
       - key: CORS_ORIGIN
-        value: "*" # Or the frontend URL once deployed
+        sync: false # Exact deployed frontend origin; wildcard is rejected in production
+      - key: FRONTEND_URL
+        sync: false
+      - key: COOKIE_SAME_SITE
+        value: none
+      - key: SESSION_TTL_HOURS
+        value: 168
       - key: NODE_ENV
         value: production
 
