@@ -19,6 +19,7 @@ import {
   Globe2,
   Heart,
   Link as LinkIcon,
+  LoaderCircle,
   LogOut,
   Mail,
   MapPin,
@@ -1189,10 +1190,20 @@ function AuthPage({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (auth.initialized && auth.user) {
+      navigate(dashboardPath(auth.user), { replace: true });
+    }
+  }, [auth.initialized, auth.user, navigate]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    if (isSubmitting) return;
+
     setError("");
+    setIsSubmitting(true);
     try {
       const result =
         mode === "login"
@@ -1204,6 +1215,8 @@ function AuthPage({
       navigate(dashboardPath(result.user), { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -1223,26 +1236,27 @@ function AuthPage({
             </Link>
           ) : null}
         </div>
-        <form className="portal-card auth-card" onSubmit={submit}>
+        <form className="portal-card auth-card" onSubmit={submit} aria-busy={isSubmitting}>
           <div className="mode-switch">
-            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>
+            <button type="button" className={mode === "login" ? "active" : ""} onClick={() => setMode("login")} disabled={isSubmitting}>
               Log in
             </button>
-            {!adminOnly ? <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")}>Sign up</button> : null}
+            {!adminOnly ? <button type="button" className={mode === "signup" ? "active" : ""} onClick={() => setMode("signup")} disabled={isSubmitting}>Sign up</button> : null}
           </div>
-          {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" autoComplete="name" minLength={2} maxLength={100} required /> : null}
-          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" type="email" autoComplete="email" maxLength={254} required />
-          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={mode === "signup" ? 12 : undefined} maxLength={128} required />
+          {mode === "signup" ? <input value={name} onChange={(event) => setName(event.target.value)} placeholder="Name" autoComplete="name" minLength={2} maxLength={100} disabled={isSubmitting} required /> : null}
+          <input value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email" type="email" autoComplete="email" maxLength={254} disabled={isSubmitting} required />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Password" type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} minLength={mode === "signup" ? 12 : undefined} maxLength={128} disabled={isSubmitting} required />
           {mode === "signup" ? <small className="form-hint">Use 12–128 characters with uppercase, lowercase, and a number.</small> : null}
           {mode === "signup" && !adminOnly ? (
-            <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)}>
+            <select value={role} onChange={(event) => setRole(event.target.value as Exclude<Role, "guest">)} disabled={isSubmitting}>
               <option value="participant">Attendee</option>
               <option value="organizer">Organizer</option>
             </select>
           ) : null}
           {error ? <small className="form-error">{error}</small> : null}
-          <button className="solid-dark" type="submit">
-            <Shield size={18} /> {mode === "login" ? "Log in" : "Create account"}
+          <button className="solid-dark" type="submit" disabled={isSubmitting}>
+            {isSubmitting ? <LoaderCircle className="button-spinner" size={18} aria-hidden="true" /> : <Shield size={18} />}
+            {isSubmitting ? (mode === "login" ? "Logging in…" : "Creating account…") : (mode === "login" ? "Log in" : "Create account")}
           </button>
           {mode === "login" && !adminOnly ? <Link to="/forgot-password">Forgot password?</Link> : null}
           <small>{adminOnly ? "Administrator accounts are provisioned securely by an operator." : "Use your Voryn account credentials."}</small>
