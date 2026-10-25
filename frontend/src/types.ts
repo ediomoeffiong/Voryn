@@ -235,3 +235,152 @@ export type CityDiscoveryModel = {
   categories: string[];
   fallbackEvents: Event[];
 };
+
+export type TicketOrder = {
+  id: string;
+  orderNumber: string;
+  userId: string;
+  eventId: string;
+  eventSlug: string;
+  status: "pending" | "processing" | "paid" | "cancelled" | "expired" | "failed" | "refunded";
+  currency: string;
+  subtotalMinor: number;
+  feesMinor: number;
+  totalMinor: number;
+  paymentReference?: string;
+  customerEmail: string;
+  customerName: string;
+  expiresAt: string;
+  paidAt?: string;
+  cancelledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OrderItem = {
+  id: string;
+  orderId: string;
+  ticketTypeId: string;
+  ticketTypeName: string;
+  unitPriceMinor: number;
+  quantity: number;
+  subtotalMinor: number;
+};
+
+export type PaymentTransaction = {
+  id: string;
+  orderId: string;
+  provider: string;
+  reference: string;
+  providerReference?: string;
+  status: string;
+  amountMinor: number;
+  currency: string;
+  channel?: string;
+  customerEmail: string;
+  gatewayResponse?: string;
+  paidAt?: string;
+  feesMinor?: number;
+  createdAt: string;
+};
+
+export type Refund = {
+  id: string;
+  orderId: string;
+  userId: string;
+  eventId: string;
+  amountMinor: number;
+  currency: string;
+  reason: string;
+  status: "requested" | "approved" | "processing" | "completed" | "rejected" | "failed";
+  providerRefundId?: string;
+  rejectionReason?: string;
+  processedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type CheckoutPayload = {
+  eventSlug: string;
+  items: Array<{ ticketTypeId: string; quantity: number }>;
+  callbackUrl?: string;
+};
+
+export type CheckoutResult = {
+  order: TicketOrder;
+  authorizationUrl: string;
+  accessCode: string;
+  reference: string;
+};
+
+export type OrganizerRevenuePayload = {
+  configured: boolean;
+  currencies: string[];
+  grossMinor: number;
+  refundedMinor: number;
+  netMinor: number;
+  grossFormatted: string;
+  netFormatted: string;
+  byEvent: Array<{
+    eventId: string;
+    eventSlug: string;
+    title: string;
+    grossMinor: number;
+    refundedMinor: number;
+    netMinor: number;
+    ordersCount: number;
+  }>;
+  recentOrders: TicketOrder[];
+};
+
+export type AdminFinancialPayload = {
+  totalOrders: number;
+  paidOrders: number;
+  totalRefunds: number;
+  totalGrossMinor: number;
+  totalRefundedMinor: number;
+  totalNetMinor: number;
+  recentLedger: Array<{
+    id: string;
+    type: string;
+    amountMinor: number;
+    currency: string;
+    direction: string;
+    description: string;
+    createdAt: string;
+  }>;
+};
+
+export type AdvancedSearchParams = {
+  q?: string;
+  mode?: DiscoveryMode;
+  countryCode?: string;
+  city?: string;
+  category?: string;
+  type?: string;
+  format?: string;
+  priceMode?: "free" | "paid" | "all";
+  from?: string;
+  to?: string;
+  sortBy?: "soonest" | "published" | "relevant" | "popular" | "price_asc" | "price_desc";
+  page?: number;
+  limit?: number;
+  interests?: string;
+};
+
+export type AdvancedSearchResponse = {
+  query: string;
+  mode?: DiscoveryMode;
+  results: Event[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    hasMore: boolean;
+  };
+  suggestions: {
+    categories: string[];
+    cities: Array<{ name: string; slug: string; country: string }>;
+  };
+};

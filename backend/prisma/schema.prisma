@@ -183,6 +183,7 @@ model Registration {
   approvalStatus String @default("approved")
   paymentStatus  String @default("not_required")
   statusReason   String?
+  orderId        String?  @db.ObjectId
   updatedAt      DateTime @updatedAt
 
   @@unique([userId, eventSlug])
@@ -216,6 +217,7 @@ model Ticket {
   registrationId String   @unique @db.ObjectId
   eventId        String   @db.ObjectId
   ticketTypeId   String?  @db.ObjectId
+  orderId        String?  @db.ObjectId
   codeHash       String   @unique
   displayCode    String   @unique
   status         String   @default("valid")
@@ -343,4 +345,154 @@ model PasswordResetToken {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model TicketOrder {
+  id               String   @id @default(auto()) @map("_id") @db.ObjectId
+  orderNumber      String   @unique
+  userId           String   @db.ObjectId
+  eventId          String   @db.ObjectId
+  eventSlug        String
+  status           String   @default("pending")
+  currency         String   @default("NGN")
+  subtotalMinor    Int
+  feesMinor        Int      @default(0)
+  totalMinor       Int
+  paymentReference String?  @unique
+  customerEmail    String
+  customerName     String
+  metadata         Json?
+  expiresAt        DateTime
+  paidAt           DateTime?
+  cancelledAt      DateTime?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([eventId, status])
+  @@index([status, expiresAt])
+}
+
+model OrderItem {
+  id             String @id @default(auto()) @map("_id") @db.ObjectId
+  orderId        String @db.ObjectId
+  ticketTypeId   String @db.ObjectId
+  ticketTypeName String
+  unitPriceMinor Int
+  quantity       Int
+  subtotalMinor  Int
+
+  @@index([orderId])
+  @@index([ticketTypeId])
+}
+
+model PaymentTransaction {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  orderId           String   @db.ObjectId
+  provider          String   @default("paystack")
+  reference         String   @unique
+  providerReference String?
+  status            String
+  amountMinor       Int
+  currency          String
+  channel           String?
+  customerEmail     String
+  gatewayResponse   String?
+  paidAt            DateTime?
+  feesMinor         Int?
+  rawPayload        Json?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status, createdAt])
+}
+
+model InventoryReservation {
+  id        String   @id @default(auto()) @map("_id") @db.ObjectId
+  orderId   String   @unique @db.ObjectId
+  eventId   String   @db.ObjectId
+  items     Json
+  status    String   @default("active")
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, expiresAt])
+  @@index([eventId])
+}
+
+model PaymentWebhookEvent {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  provider        String   @default("paystack")
+  eventId         String   @unique
+  eventType       String
+  signature       String
+  status          String   @default("received")
+  payload         Json
+  processingError String?
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([provider, eventType])
+  @@index([createdAt])
+}
+
+model Refund {
+  id                   String    @id @default(auto()) @map("_id") @db.ObjectId
+  orderId              String    @db.ObjectId
+  paymentTransactionId String?   @db.ObjectId
+  userId               String    @db.ObjectId
+  eventId              String    @db.ObjectId
+  amountMinor          Int
+  currency             String
+  reason               String
+  status               String    @default("requested")
+  providerRefundId     String?
+  reviewedById         String?   @db.ObjectId
+  reviewedAt           DateTime?
+  rejectionReason      String?
+  processedAt          DateTime?
+  rawPayload           Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@index([orderId])
+  @@index([eventId, status])
+  @@index([userId])
+}
+
+model FinancialLedgerEntry {
+  id            String   @id @default(auto()) @map("_id") @db.ObjectId
+  type          String
+  orderId       String?  @db.ObjectId
+  eventId       String   @db.ObjectId
+  organizerSlug String
+  amountMinor   Int
+  currency      String
+  direction     String
+  description   String
+  createdAt     DateTime @default(now())
+
+  @@index([organizerSlug, createdAt])
+  @@index([eventId, type])
+}
+
+model BackgroundJob {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  type        String
+  payload     Json
+  status      String    @default("queued")
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(5)
+  runAt       DateTime  @default(now())
+  lastError   String?
+  lockedAt    DateTime?
+  lockedBy    String?
+  processedAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, runAt])
+  @@index([type, status])
 }

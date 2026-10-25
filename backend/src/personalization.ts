@@ -193,25 +193,90 @@ export function globalEvents() {
     .sort((a, b) => b.attendeeCount + b.rsvpCount - (a.attendeeCount + a.rsvpCount));
 }
 
-function recommendationScore(event: Event, location: LocationContext, selectedInterests: Interest[]) {
+export type PersonalizationContext = {
+  location: LocationContext;
+  selectedInterests?: Interest[];
+  userInterests?: string[];
+  followedOrganizers?: string[];
+  favoriteSlugs?: string[];
+};
+
+export function recommendationScore(
+  event: Event,
+  context: PersonalizationContext
+) {
   const city = cities.find((item) => item.slug === event.citySlug);
   let score = event.attendeeCount * 0.002 + event.rsvpCount * 0.004 + event.ticketSalesCount * 0.003;
+  
   if (event.badges.includes("recommended")) score += 28;
   if (event.badges.includes("featured")) score += 20;
   if (event.badges.includes("trending")) score += 18;
-  if (selectedInterests.includes(event.category)) score += 110;
-  if (city?.countryCode === location.countryCode) score += 24;
-  if (location.nearestCity?.slug === event.citySlug) score += 28;
+  
+  // Selected or user profile interests
+  const interestsList = [...(context.selectedInterests ?? []), ...(context.userInterests ?? [])];
+  if (interestsList.includes(event.category)) score += 110;
+  
+  // Followed organizer signal
+  if (context.followedOrganizers?.includes(event.organizerSlug)) score += 85;
+  
+  // Favorites similarity signal
+  if (context.favoriteSlugs?.includes(event.slug)) score += 50;
+
+  // Location signals
+  if (city?.countryCode === context.location.countryCode) score += 24;
+  if (context.location.nearestCity?.slug === event.citySlug) score += 28;
   if (event.mode === "online") score += 10;
   if (event.mode === "global") score += 8;
   if (event.status === "cancelled") score -= 80;
   return score;
 }
 
-export function recommendedEvents(location: LocationContext, selectedInterests: Interest[], limit = 6) {
-  return [...publicEvents]
-    .sort((a, b) => recommendationScore(b, location, selectedInterests) - recommendationScore(a, location, selectedInterests))
-    .slice(0, limit);
+export function recommendedEvents(
+  location: LocationContext,
+  selectedInterests: Interest[],
+  limit = 6,
+  userContext?: { followedOrganizers?: string[]; userInterests?: string[]; favoriteSlugs?: string[] }
+) {
+  const context: PersonalizationContext = {
+    location,
+    selectedInterests,
+    followedOrganizers: userContext?.followedOrganizers,
+    userInterests: userContext?.userInterests,
+    favoriteSlugs: userContext?.favoriteSlugs
+  };
+
+  const ranked = [...publicEvents].sort(
+    (a, b) => recommendationScore(b, context) - recommendationScore(a, context)
+  );
+
+  // Apply diversity controls: max 2 per organizer, max 3 per category
+  const results: Event[] = [];
+  const organizerCounts = new Map<string, number>();
+  const categoryCounts = new Map<string, number>();
+
+  for (const event of ranked) {
+    if (results.length >= limit) break;
+    const orgCount = organizerCounts.get(event.organizerSlug) || 0;
+    const catCount = categoryCounts.get(event.category) || 0;
+
+    if (orgCount < 2 && catCount < 3) {
+      results.push(event);
+      organizerCounts.set(event.organizerSlug, orgCount + 1);
+      categoryCounts.set(event.category, catCount + 1);
+    }
+  }
+
+  // If diversity filter eliminated too many, fill remaining up to limit
+  if (results.length < limit) {
+    for (const event of ranked) {
+      if (results.length >= limit) break;
+      if (!results.some((r) => r.slug === event.slug)) {
+        results.push(event);
+      }
+    }
+  }
+
+  return results;
 }
 
 export function localEventsForCountry(countryCode: string) {

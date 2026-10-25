@@ -19,13 +19,13 @@ function writeErrorMessage(value: unknown) {
 async function repairLegacyTimestamps() {
   // Raw MongoDB commands use Extended JSON, not JavaScript Date instances.
   const now = { $date: new Date().toISOString() };
-  for (const collection of ["Event", "Organizer", "User", "TicketType", "EventLifecycleLog", "MediaAsset", "Session", "PasswordResetToken", "Announcement", "Ticket", "CheckIn", "Notification", "ModerationReport", "AuditLog", "PlatformSetting", "OrganizerVerification"] as const) {
+  for (const collection of ["Event", "Organizer", "User", "TicketType", "EventLifecycleLog", "MediaAsset", "Session", "PasswordResetToken", "Announcement", "Ticket", "CheckIn", "Notification", "ModerationReport", "AuditLog", "PlatformSetting", "OrganizerVerification", "TicketOrder", "OrderItem", "PaymentTransaction", "InventoryReservation", "PaymentWebhookEvent", "Refund", "FinancialLedgerEntry", "BackgroundJob"] as const) {
     const result = await prisma.$runCommandRaw({
       update: collection,
       updates: [
         { q: { createdAt: null, updatedAt: { $type: "date" } }, u: [{ $set: { createdAt: "$updatedAt" } }], multi: true },
         { q: { createdAt: null }, u: { $set: { createdAt: now } }, multi: true },
-        ...(["Event", "Organizer", "User", "TicketType", "Announcement", "ModerationReport", "PlatformSetting", "OrganizerVerification"].includes(collection)
+        ...(["Event", "Organizer", "User", "TicketType", "Announcement", "ModerationReport", "PlatformSetting", "OrganizerVerification", "TicketOrder", "PaymentTransaction", "InventoryReservation", "Refund", "BackgroundJob"].includes(collection)
           ? [{ q: { updatedAt: null }, u: { $set: { updatedAt: now } }, multi: true }]
           : [])
       ]

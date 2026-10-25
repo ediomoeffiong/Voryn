@@ -13,7 +13,17 @@ import {
   OrganizerDashboard,
   ParticipantDashboard,
   Role,
-  User
+  User,
+  TicketOrder,
+  OrderItem,
+  PaymentTransaction,
+  Refund,
+  CheckoutPayload,
+  CheckoutResult,
+  OrganizerRevenuePayload,
+  AdminFinancialPayload,
+  AdvancedSearchParams,
+  AdvancedSearchResponse
 } from "./types";
 
 const rawApiBase = import.meta.env.VITE_API_URL ?? import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? "" : "https://voryn-backend.onrender.com");
@@ -334,4 +344,77 @@ export function getAdminDashboard(token: string) {
 
 export function getCalendarLinks(slug: string) {
   return request<CalendarLinks>(`/api/events/${slug}/calendar`);
+}
+
+// Stage 4: Payments, Checkout & Refunds
+export function initializeCheckout(payload: CheckoutPayload) {
+  return request<CheckoutResult>("/api/payments/checkout/initialize", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getOrderDetails(orderNumber: string) {
+  return request<{
+    order: TicketOrder;
+    items: OrderItem[];
+    transaction: PaymentTransaction | null;
+    tickets: Array<{ id: string; displayCode: string; status: string }>;
+  }>(`/api/payments/orders/${orderNumber}`);
+}
+
+export function verifyPayment(reference: string) {
+  return request<{
+    success: boolean;
+    order: TicketOrder;
+    ticket?: { id: string; displayCode: string };
+    registration?: unknown;
+    message?: string;
+  }>(`/api/payments/verify/${encodeURIComponent(reference)}`);
+}
+
+export function getMyOrders() {
+  return request<{ orders: TicketOrder[] }>("/api/payments/orders/my");
+}
+
+export function requestRefund(orderId: string, reason: string) {
+  return request<{ refund: Refund }>("/api/payments/refunds/request", {
+    method: "POST",
+    body: JSON.stringify({ orderId, reason })
+  });
+}
+
+export function getMyRefunds() {
+  return request<{ refunds: Refund[] }>("/api/payments/refunds/my");
+}
+
+export function getOrganizerRevenue() {
+  return request<OrganizerRevenuePayload>("/api/payments/organizer/revenue");
+}
+
+export function getOrganizerOrders() {
+  return request<{ orders: TicketOrder[] }>("/api/payments/organizer/orders");
+}
+
+export function getOrganizerRefunds() {
+  return request<{ refunds: Refund[] }>("/api/payments/organizer/refunds");
+}
+
+export function decideOrganizerRefund(id: string, decision: "approved" | "rejected", reason?: string) {
+  return request<{ refund: Refund }>(`/api/payments/organizer/refunds/${id}/decision`, {
+    method: "POST",
+    body: JSON.stringify({ decision, reason })
+  });
+}
+
+export function getAdminFinancials() {
+  return request<AdminFinancialPayload>("/api/payments/admin/overview");
+}
+
+export function advancedSearch(params: AdvancedSearchParams) {
+  const searchParams = new URLSearchParams();
+  Object.entries(params).forEach(([key, val]) => {
+    if (val !== undefined && val !== "") searchParams.set(key, String(val));
+  });
+  return request<AdvancedSearchResponse>(`/api/search?${searchParams.toString()}`);
 }

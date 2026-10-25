@@ -87,6 +87,7 @@ export function issueCsrfToken(_request: Request, response: Response) {
 
 export function requireCsrf(request: Request, response: Response, next: NextFunction) {
   if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return next();
+  if (request.path === "/api/payments/webhook" || request.path.startsWith("/api/internal/")) return next();
   const cookie = request.cookies?.[CSRF_COOKIE];
   const header = request.header("x-csrf-token");
   if (!cookie || !header || cookie !== header) return response.status(403).json({ error: "Invalid CSRF token" });

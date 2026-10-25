@@ -2,8 +2,23 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import { Activity, Archive, BarChart3, Bell, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, CircleDollarSign, ClipboardList, Download, LayoutDashboard, LogOut, Mail, Menu, Search, Settings, ShieldCheck, Ticket, UserRound, UsersRound, X } from "lucide-react";
-import { getAdminDashboard, getMe, getOrganizerDashboard, getParticipantDashboard, logoutSession, updateOrganizerProfile } from "./api";
-import type { AdminDashboard, OrganizerDashboard, ParticipantDashboard, User } from "./types";
+import {
+  getAdminDashboard,
+  getAdminFinancials,
+  getMe,
+  getMyOrders,
+  getMyRefunds,
+  getOrganizerDashboard,
+  getOrganizerOrders,
+  getOrganizerRefunds,
+  getOrganizerRevenue,
+  getParticipantDashboard,
+  logoutSession,
+  requestRefund,
+  decideOrganizerRefund,
+  updateOrganizerProfile
+} from "./api";
+import type { AdminDashboard, OrganizerDashboard, ParticipantDashboard, User, TicketOrder, Refund } from "./types";
 import {
   adminUserAction, checkInTicket, createAnnouncement, exportStage3Attendees, getAdminOrganizers, getAdminOverview, getAdminUsers, getAnnouncements, getAttendees, getAuditLogs, getNotifications, getOrganizerAnalytics, getOrganizerOverview, getPlatformSettings, getReports, getSystemHealth, getWallet, readNotifications, resolveReport, reverseCheckIn, savePlatformSetting, unfollowOrganizer, updateRegistrationStatus, verifyOrganizer,
   type AdminOverview, type Analytics, type Announcement, type Attendee, type AuditEntry, type ModerationReport, type Notification, type OrganizerOverview, type Page, type PlatformSetting, type WalletItem
@@ -15,9 +30,9 @@ type NavItem = { label: string; path: string; icon: React.ElementType };
 const NAV: Record<DashboardKind, NavItem[]> = {
   participant: [
     { label: "Overview", path: "/dashboard", icon: LayoutDashboard }, { label: "My Events", path: "/dashboard/events", icon: CalendarDays },
-    { label: "My Tickets", path: "/dashboard/tickets", icon: Ticket }, { label: "Saved Events", path: "/dashboard/saved", icon: Archive },
-    { label: "Following", path: "/dashboard/following", icon: UsersRound }, { label: "Notifications", path: "/dashboard/notifications", icon: Bell },
-    { label: "Profile & settings", path: "/dashboard/settings", icon: Settings }
+    { label: "My Tickets", path: "/dashboard/tickets", icon: Ticket }, { label: "Orders & Receipts", path: "/dashboard/orders", icon: CircleDollarSign },
+    { label: "Saved Events", path: "/dashboard/saved", icon: Archive }, { label: "Following", path: "/dashboard/following", icon: UsersRound },
+    { label: "Notifications", path: "/dashboard/notifications", icon: Bell }, { label: "Profile & settings", path: "/dashboard/settings", icon: Settings }
   ],
   organizer: [
     { label: "Overview", path: "/organizer", icon: LayoutDashboard }, { label: "My Events", path: "/organizer/events", icon: CalendarDays },
@@ -27,10 +42,11 @@ const NAV: Record<DashboardKind, NavItem[]> = {
     { label: "Settings", path: "/organizer/settings", icon: Settings }
   ],
   admin: [
-    { label: "Overview", path: "/admin", icon: LayoutDashboard }, { label: "Users", path: "/admin/users", icon: UserRound },
-    { label: "Organizers", path: "/admin/organizers", icon: UsersRound }, { label: "Events", path: "/admin/events", icon: CalendarDays },
-    { label: "Moderation", path: "/admin/reports", icon: ShieldCheck }, { label: "Settings", path: "/admin/settings", icon: Settings },
-    { label: "Audit Logs", path: "/admin/audit-logs", icon: ClipboardList }, { label: "System Health", path: "/admin/system-health", icon: Activity }
+    { label: "Overview", path: "/admin", icon: LayoutDashboard }, { label: "Financials", path: "/admin/financials", icon: CircleDollarSign },
+    { label: "Users", path: "/admin/users", icon: UserRound }, { label: "Organizers", path: "/admin/organizers", icon: UsersRound },
+    { label: "Events", path: "/admin/events", icon: CalendarDays }, { label: "Moderation", path: "/admin/reports", icon: ShieldCheck },
+    { label: "Settings", path: "/admin/settings", icon: Settings }, { label: "Audit Logs", path: "/admin/audit-logs", icon: ClipboardList },
+    { label: "System Health", path: "/admin/system-health", icon: Activity }
   ]
 };
 
@@ -108,9 +124,158 @@ function CommunicationsView() {
   return <><PageHeader eyebrow="Audience engagement" title="Communications" />{notice ? <div className="s3-warning">{notice}</div> : null}<div className="s3-two-column"><form className="s3-panel s3-form" onSubmit={send}><h2>Compose announcement</h2><label>Event<select required value={form.eventSlug} onChange={(e) => setForm({ ...form, eventSlug: e.target.value })}>{dashboard?.events.map((item) => <option value={item.slug} key={item.id}>{item.title}</option>)}</select></label><label>Audience<select value={form.audience} onChange={(e) => setForm({ ...form, audience: e.target.value })}>{["confirmed", "pending", "checked_in", "not_checked_in"].map((item) => <option key={item} value={item}>{item.replace(/_/g, " ")}</option>)}</select></label><label>Subject<input required value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></label><label>Message<textarea required rows={8} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} /></label><div className="s3-actions"><button type="submit" className="s3-secondary" onClick={() => setForm({ ...form, action: "draft" })}>Save draft</button><button type="submit" className="s3-primary" onClick={() => setForm({ ...form, action: "send" })}>Send now</button></div></form><section className="s3-panel"><h2>History</h2>{loading ? <Loading /> : error ? <ErrorPanel message={error} /> : data?.length ? <div className="s3-list">{data.map((item) => <article key={item.id}><span><strong>{item.subject}</strong><small>{item.eventSlug} · {item.audience.replace(/_/g, " ")} · {item.recipientCount} recipients</small></span><span className={statusClass(item.status)}>{item.status.replace(/_/g, " ")}</span></article>)}</div> : <Empty title="No announcements" text="Draft your first operational message." />}</section></div></>;
 }
 
+function OrganizerRevenueView() {
+  const [refresh, setRefresh] = useState(0);
+  const revenue = useLoad(getOrganizerRevenue, [refresh]);
+  const orders = useLoad(getOrganizerOrders, [refresh]);
+  const refunds = useLoad(getOrganizerRefunds, [refresh]);
+  const [tab, setTab] = useState<"orders" | "refunds" | "events">("orders");
+  const [actionNotice, setActionNotice] = useState("");
+
+  const handleRefundDecision = async (id: string, decision: "approved" | "rejected") => {
+    const reason = decision === "rejected" ? window.prompt("Reason for rejection:") ?? undefined : undefined;
+    if (decision === "rejected" && !reason) return;
+    try {
+      await decideOrganizerRefund(id, decision, reason);
+      setActionNotice(`Refund request was ${decision}.`);
+      setRefresh((v) => v + 1);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Action failed");
+    }
+  };
+
+  if (revenue.loading) return <Loading />;
+  if (revenue.error || !revenue.data) return <ErrorPanel message={revenue.error} />;
+
+  const rev = revenue.data;
+  return (
+    <>
+      <PageHeader eyebrow="Verified Financials" title="Revenue & Orders" />
+      {actionNotice ? <div className="s3-success">{actionNotice}</div> : null}
+      <div className="s3-metrics">
+        <Metric label="Gross sales" value={`NGN ${rev.grossFormatted}`} help="Total captured ticket payments" />
+        <Metric label="Refunds" value={`NGN ${(rev.refundedMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`} help="Approved & completed refunds" />
+        <Metric label="Net revenue" value={`NGN ${rev.netFormatted}`} help="Net settlement volume" />
+      </div>
+
+      <div className="s3-filters" style={{ marginTop: "24px" }}>
+        <button className={tab === "orders" ? "s3-primary" : "s3-secondary"} onClick={() => setTab("orders")}>
+          Orders ({orders.data?.orders.length ?? 0})
+        </button>
+        <button className={tab === "refunds" ? "s3-primary" : "s3-secondary"} onClick={() => setTab("refunds")}>
+          Refund Requests ({refunds.data?.refunds.length ?? 0})
+        </button>
+        <button className={tab === "events" ? "s3-primary" : "s3-secondary"} onClick={() => setTab("events")}>
+          By Event ({rev.byEvent.length})
+        </button>
+      </div>
+
+      {tab === "orders" ? (
+        <section className="s3-panel s3-table-wrap">
+          <h2>Recent Ticket Orders</h2>
+          {orders.loading ? <Loading /> : !orders.data?.orders.length ? (
+            <Empty title="No orders yet" text="When attendees purchase paid tickets, verified orders appear here." />
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Order #</th>
+                  <th>Customer</th>
+                  <th>Amount</th>
+                  <th>Status</th>
+                  <th>Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.data.orders.map((o) => (
+                  <tr key={o.id}>
+                    <td><strong>{o.orderNumber}</strong><br /><small>{o.eventSlug}</small></td>
+                    <td>{o.customerName}<br /><small>{o.customerEmail}</small></td>
+                    <td>{o.currency} {(o.totalMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td><span className={statusClass(o.status)}>{o.status}</span></td>
+                    <td>{formatDate(o.paidAt || o.createdAt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : tab === "refunds" ? (
+        <section className="s3-panel s3-table-wrap">
+          <h2>Refund Requests</h2>
+          {refunds.loading ? <Loading /> : !refunds.data?.refunds.length ? (
+            <Empty title="No refund requests" text="Attendees can request refunds for eligible paid orders." />
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>Order ID</th>
+                  <th>Amount</th>
+                  <th>Reason</th>
+                  <th>Status</th>
+                  <th>Requested</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {refunds.data.refunds.map((r) => (
+                  <tr key={r.id}>
+                    <td>{r.orderId}</td>
+                    <td>{r.currency} {(r.amountMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                    <td>{r.reason}</td>
+                    <td><span className={statusClass(r.status)}>{r.status}</span></td>
+                    <td>{formatDate(r.createdAt)}</td>
+                    <td>
+                      {r.status === "requested" ? (
+                        <div className="s3-row-actions">
+                          <button onClick={() => handleRefundDecision(r.id, "approved")}>Approve</button>
+                          <button onClick={() => handleRefundDecision(r.id, "rejected")}>Reject</button>
+                        </div>
+                      ) : (
+                        <span>{r.status}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      ) : (
+        <section className="s3-panel s3-table-wrap">
+          <h2>Revenue by Event</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Event</th>
+                <th>Gross</th>
+                <th>Refunds</th>
+                <th>Net</th>
+                <th>Orders</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rev.byEvent.map((ev) => (
+                <tr key={ev.eventId}>
+                  <td><strong>{ev.title}</strong></td>
+                  <td>NGN {(ev.grossMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td>NGN {(ev.refundedMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td><strong>NGN {(ev.netMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</strong></td>
+                  <td>{ev.ordersCount}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}
+
 function AnalyticsView({ revenue = false }: { revenue?: boolean }) {
-  const { data, error, loading } = useLoad<Analytics>(() => getOrganizerAnalytics(), []); if (loading) return <Loading />; if (error || !data) return <ErrorPanel message={error} />;
-  if (revenue) return <><PageHeader eyebrow="Verified payments only" title="Revenue" /><div className="s3-metrics"><Metric label="Gross sales" value="Unavailable" /><Metric label="Refunds" value="Unavailable" /><Metric label="Net sales" value="Unavailable" /></div><div className="s3-panel"><Empty title="Payment provider not configured" text="Stage 3 never derives revenue from display prices. Verified payment records will appear here after the Stage 4 integration." /></div></>;
+  const { data, error, loading } = useLoad<Analytics>(() => getOrganizerAnalytics(), []);
+  if (revenue) return <OrganizerRevenueView />;
+  if (loading) return <Loading />; if (error || !data) return <ErrorPanel message={error} />;
   const max = Math.max(1, ...data.byEvent.map((item) => item.registrations)); return <><PageHeader eyebrow="Database-backed metrics" title="Analytics" /><section className="s3-panel"><h2>Event performance</h2><div className="s3-chart">{data.byEvent.map((item) => <div key={item.eventSlug}><span title={`${item.registrations} registrations`} style={{ height: `${Math.max(6, item.registrations / max * 100)}%` }} /><small>{item.title}</small></div>)}</div></section><section className="s3-panel s3-table-wrap"><table><thead><tr><th>Event</th><th>Registrations</th><th>Confirmed</th><th>Cancelled</th><th>Waitlist</th><th>Check-in rate</th><th>Remaining</th><th>Conversion</th></tr></thead><tbody>{data.byEvent.map((item) => <tr key={item.eventSlug}><td><strong>{item.title}</strong></td><td>{item.registrations}</td><td>{item.confirmed}</td><td>{item.cancelled}</td><td>{item.waitlisted}</td><td>{Math.round(item.checkInRate * 100)}%</td><td>{item.remainingCapacity ?? "Unlimited"}</td><td>N/A</td></tr>)}</tbody></table></section></>;
 }
 
@@ -122,9 +287,152 @@ function OrganizerSettingsView() {
 
 function TicketCard({ item }: { item: WalletItem }) { const [qr, setQr] = useState(""); useEffect(() => { if (item.ticket) QRCode.toDataURL(item.ticket.displayCode, { width: 240, margin: 1, errorCorrectionLevel: "M" }).then(setQr); }, [item.ticket?.displayCode]); return <article className="s3-ticket"><div><span className={statusClass(item.ticket?.status ?? item.registration.registrationStatus)}>{item.ticket?.status ?? item.registration.registrationStatus}</span><h2>{item.event.title}</h2><p>{formatDate(item.event.startsAt)}<br />{item.event.venue}</p><dl><dt>Reference</dt><dd>{item.ticket?.displayCode ?? item.registration.ticketCode}</dd><dt>Registration</dt><dd>{item.registration.registrationStatus}</dd></dl></div>{qr ? <img src={qr} alt={`QR ticket for ${item.event.title}`} /> : <div className="s3-ticket-unavailable">No valid admission credential</div>}</article>; }
 
+function ParticipantOrdersView() {
+  const [refresh, setRefresh] = useState(0);
+  const orders = useLoad(getMyOrders, [refresh]);
+  const refunds = useLoad(getMyRefunds, [refresh]);
+  const [notice, setNotice] = useState("");
+  const [selectedOrder, setSelectedOrder] = useState<TicketOrder | null>(null);
+  const [refundReason, setRefundReason] = useState("");
+  const [submittingRefund, setSubmittingRefund] = useState(false);
+
+  const handleRequestRefund = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedOrder || !refundReason.trim()) return;
+    setSubmittingRefund(true);
+    try {
+      await requestRefund(selectedOrder.id, refundReason.trim());
+      setNotice(`Refund requested for order ${selectedOrder.orderNumber}. We will notify you once reviewed.`);
+      setSelectedOrder(null);
+      setRefundReason("");
+      setRefresh((v) => v + 1);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to request refund");
+    } finally {
+      setSubmittingRefund(false);
+    }
+  };
+
+  return (
+    <>
+      <PageHeader eyebrow="Purchase history" title="Orders & Receipts" />
+      {notice ? <div className="s3-success">{notice}</div> : null}
+
+      <section className="s3-panel s3-table-wrap">
+        <h2>Your Ticket Orders</h2>
+        {orders.loading ? (
+          <Loading />
+        ) : orders.error ? (
+          <ErrorPanel message={orders.error} />
+        ) : !orders.data?.orders.length ? (
+          <Empty title="No orders yet" text="When you purchase paid tickets on Voryn, your orders and receipts will appear here." />
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Order Number</th>
+                <th>Event</th>
+                <th>Amount</th>
+                <th>Status</th>
+                <th>Date</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.data.orders.map((o) => (
+                <tr key={o.id}>
+                  <td><strong>{o.orderNumber}</strong></td>
+                  <td>{o.eventSlug}</td>
+                  <td>{o.currency} {(o.totalMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td><span className={statusClass(o.status)}>{o.status}</span></td>
+                  <td>{formatDate(o.paidAt || o.createdAt)}</td>
+                  <td>
+                    <div className="s3-row-actions">
+                      <Link to={`/checkout/callback?reference=${encodeURIComponent(o.orderNumber)}`}>View Receipt</Link>
+                      {o.status === "paid" ? (
+                        <button onClick={() => { setSelectedOrder(o); setRefundReason(""); }}>
+                          Request Refund
+                        </button>
+                      ) : null}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+
+      {refunds.data?.refunds.length ? (
+        <section className="s3-panel s3-table-wrap" style={{ marginTop: "24px" }}>
+          <h2>Refund Requests & Status</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Order ID</th>
+                <th>Amount</th>
+                <th>Reason</th>
+                <th>Status</th>
+                <th>Requested</th>
+              </tr>
+            </thead>
+            <tbody>
+              {refunds.data.refunds.map((r) => (
+                <tr key={r.id}>
+                  <td>{r.orderId}</td>
+                  <td>{r.currency} {(r.amountMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td>{r.reason}</td>
+                  <td><span className={statusClass(r.status)}>{r.status}</span></td>
+                  <td>{formatDate(r.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+
+      {selectedOrder ? (
+        <div className="checkout-modal-backdrop" onClick={() => setSelectedOrder(null)}>
+          <div className="checkout-modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="checkout-modal-header">
+              <div>
+                <h2>Request Refund</h2>
+                <p>Order: <strong>{selectedOrder.orderNumber}</strong> ({selectedOrder.currency} {(selectedOrder.totalMinor / 100).toFixed(2)})</p>
+              </div>
+              <button className="s3-icon-button" onClick={() => setSelectedOrder(null)}><X size={18} /></button>
+            </div>
+            <form onSubmit={handleRequestRefund} style={{ marginTop: "16px" }}>
+              <label>
+                Reason for Refund Request
+                <textarea
+                  required
+                  rows={4}
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                  placeholder="Please describe the reason for your refund request..."
+                  style={{ width: "100%", padding: "10px", marginTop: "8px", borderRadius: "8px", border: "1px solid var(--border-color, #e2e8f0)" }}
+                />
+              </label>
+              <div style={{ display: "flex", gap: "10px", marginTop: "16px", justifyContent: "flex-end" }}>
+                <button type="button" className="s3-secondary" onClick={() => setSelectedOrder(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="s3-primary" disabled={submittingRefund || !refundReason.trim()}>
+                  {submittingRefund ? "Submitting..." : "Submit Request"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 function ParticipantView({ section }: { section: string }) {
   const { data, error, loading, reload } = useLoad<ParticipantDashboard>(() => getParticipantDashboard(""), []); const wallet = useLoad<WalletItem[]>(getWallet, []); const notifications = useLoad(getNotifications, []);
   if (loading) return <Loading />; if (error || !data) return <ErrorPanel message={error} />;
+  if (section === "orders") return <ParticipantOrdersView />;
   if (section === "tickets") return <><PageHeader eyebrow="Admission credentials" title="My tickets" actions={<button className="s3-secondary" onClick={() => window.print()}>Print wallet</button>} />{wallet.loading ? <Loading /> : wallet.error ? <ErrorPanel message={wallet.error} /> : wallet.data?.length ? <div className="s3-ticket-grid">{wallet.data.map((item) => <TicketCard item={item} key={item.registration.id} />)}</div> : <Empty title="No tickets yet" text="Confirmed free registrations and verified paid purchases appear here." />}</>;
   if (section === "notifications") return (
     <>
@@ -153,8 +461,60 @@ function ParticipantView({ section }: { section: string }) {
   return <><PageHeader eyebrow={`Welcome back, ${data.user.name.split(" ")[0]}`} title="Your event world, organized" actions={<Link className="s3-primary" to="/search">Explore events</Link>} /><div className="s3-metrics"><Metric label="Upcoming" value={data.upcoming.length} /><Metric label="Past events" value={data.past.length} /><Metric label="Valid tickets" value={wallet.data?.filter((item) => item.ticket?.status === "valid").length ?? 0} /><Metric label="Saved events" value={data.favorites.length} /><Metric label="Following" value={data.following.length} /><Metric label="Unread" value={notifications.data?.unread ?? 0} /></div><section className="s3-panel"><h2>Coming up</h2>{data.upcoming.length ? <div className="s3-list">{data.upcoming.slice(0, 5).map((item) => <Link to={`/events/${item.slug}`} key={item.id}><span><strong>{item.title}</strong><small>{formatDate(item.startsAt)} · {item.venue}</small></span><ChevronRight /></Link>)}</div> : <Empty title="Nothing scheduled" text="Explore Voryn to find your next event." />}</section></>;
 }
 
+function AdminFinancialsView() {
+  const [refresh, setRefresh] = useState(0);
+  const financials = useLoad(getAdminFinancials, [refresh]);
+
+  if (financials.loading) return <Loading />;
+  if (financials.error || !financials.data) return <ErrorPanel message={financials.error} />;
+
+  const f = financials.data;
+  return (
+    <>
+      <PageHeader eyebrow="Platform Revenue & Settlement" title="Financials & Ledger" />
+      <div className="s3-metrics">
+        <Metric label="Gross Platform Volume" value={`NGN ${(f.totalGrossMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`} help="Total verified paid orders" />
+        <Metric label="Total Paid Orders" value={f.paidOrders} help={`Out of ${f.totalOrders} total initiated`} />
+        <Metric label="Refunded Volume" value={`NGN ${(f.totalRefundedMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`} help={`${f.totalRefunds} refunds processed`} />
+        <Metric label="Net Settlement" value={`NGN ${(f.totalNetMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}`} help="Gross minus completed refunds" />
+      </div>
+
+      <section className="s3-panel s3-table-wrap" style={{ marginTop: "24px" }}>
+        <h2>Financial Ledger Entries</h2>
+        {!f.recentLedger.length ? (
+          <Empty title="No ledger records" text="Ledger entries are created when orders are settled or refunded." />
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Type</th>
+                <th>Direction</th>
+                <th>Amount</th>
+                <th>Date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {f.recentLedger.map((l) => (
+                <tr key={l.id}>
+                  <td><strong>{l.description}</strong></td>
+                  <td><span className={statusClass(l.type)}>{l.type}</span></td>
+                  <td><span className={statusClass(l.direction)}>{l.direction}</span></td>
+                  <td>{l.currency} {(l.amountMinor / 100).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
+                  <td>{formatDate(l.createdAt)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </section>
+    </>
+  );
+}
+
 function AdminView({ section }: { section: string }) {
   const [refresh, setRefresh] = useState(0); const overview = useLoad<AdminOverview>(getAdminOverview, [refresh]); const users = useLoad<Page<User>>(() => getAdminUsers({}), [refresh]); const organizers = useLoad(() => getAdminOrganizers(), [refresh]); const reports = useLoad(() => getReports(), [refresh]); const audit = useLoad<Page<AuditEntry>>(getAuditLogs, [refresh]); const settings = useLoad<PlatformSetting[]>(getPlatformSettings, [refresh]); const health = useLoad(getSystemHealth, [refresh]); const legacy = useLoad<AdminDashboard>(() => getAdminDashboard(""), [refresh]);
+  if (section === "financials") return <AdminFinancialsView />;
   if (section === "users") return <><PageHeader eyebrow="Account administration" title="Users" />{users.loading ? <Loading /> : users.error || !users.data ? <ErrorPanel message={users.error} /> : <section className="s3-panel s3-table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Joined</th><th>Actions</th></tr></thead><tbody>{users.data.items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.email}</small></td><td>{item.role}</td><td><span className={statusClass(item.accountStatus ?? "active")}>{item.accountStatus ?? "active"}</span></td><td>{formatDate(item.createdAt)}</td><td><div className="s3-row-actions">{item.accountStatus === "suspended" ? <button onClick={async () => { await adminUserAction(item.id, "reactivate"); setRefresh((v) => v + 1); }}>Reactivate</button> : <button onClick={async () => { if (!confirm(`Suspend ${item.name}?`)) return; await adminUserAction(item.id, "suspend", undefined, "Administrative suspension"); setRefresh((v) => v + 1); }}>Suspend</button>}<button onClick={async () => { if (!confirm("Revoke all active sessions?")) return; await adminUserAction(item.id, "revoke_sessions"); }}>Revoke sessions</button></div></td></tr>)}</tbody></table></section>}</>;
   if (section === "organizers") return <><PageHeader eyebrow="Trust & verification" title="Organizers" />{organizers.loading ? <Loading /> : organizers.error || !organizers.data ? <ErrorPanel message={organizers.error} /> : <section className="s3-panel s3-table-wrap"><table><thead><tr><th>Organizer</th><th>Verification</th><th>Status</th><th>Followers</th><th>Actions</th></tr></thead><tbody>{organizers.data.items.map((item) => <tr key={item.id}><td><strong>{item.name}</strong><small>{item.slug}</small></td><td><span className={statusClass(item.verificationStatus)}>{item.verificationStatus}</span></td><td>{item.accountStatus}</td><td>{item.followers}</td><td><div className="s3-row-actions"><button onClick={async () => { await verifyOrganizer(item.id, "verified", "Reviewed by platform administrator"); setRefresh((v) => v + 1); }}>Verify</button><button onClick={async () => { const notes = prompt("Reason for rejection"); if (!notes) return; await verifyOrganizer(item.id, "rejected", notes); setRefresh((v) => v + 1); }}>Reject</button></div></td></tr>)}</tbody></table></section>}</>;
   if (section === "reports") return <><PageHeader eyebrow="Safety operations" title="Moderation queue" />{reports.loading ? <Loading /> : reports.error || !reports.data ? <ErrorPanel message={reports.error} /> : <section className="s3-panel s3-table-wrap"><table><thead><tr><th>Report</th><th>Resource</th><th>Priority</th><th>Status</th><th>Actions</th></tr></thead><tbody>{reports.data.items.map((item: ModerationReport) => <tr key={item.id}><td><strong>{item.category}</strong><small>{item.description}</small></td><td>{item.resourceType}: {item.resourceId}</td><td>{item.priority}</td><td><span className={statusClass(item.status)}>{item.status}</span></td><td><div className="s3-row-actions"><button onClick={async () => { await resolveReport(item.id, "under_review"); setRefresh((v) => v + 1); }}>Review</button><button onClick={async () => { const resolution = prompt("Resolution notes"); if (!resolution) return; await resolveReport(item.id, "resolved", resolution); setRefresh((v) => v + 1); }}>Resolve</button></div></td></tr>)}</tbody></table>{!reports.data.items.length ? <Empty title="Queue clear" text="No reports currently require review." /> : null}</section>}</>;
@@ -163,7 +523,7 @@ function AdminView({ section }: { section: string }) {
   if (section === "settings") return <><PageHeader eyebrow="Protected configuration" title="Platform settings" />{settings.loading ? <Loading /> : settings.error ? <ErrorPanel message={settings.error} /> : <div className="s3-two-column"><section className="s3-panel"><h2>Current settings</h2><div className="s3-list">{settings.data?.map((item) => <article key={item.id}><span><strong>{item.key}</strong><small>{JSON.stringify(item.value)}</small></span></article>)}</div>{!settings.data?.length ? <Empty title="Using safe defaults" text="No database overrides have been configured." /> : null}</section><form className="s3-panel s3-form" onSubmit={async (event) => { event.preventDefault(); const form = new FormData(event.currentTarget); const key = String(form.get("key")); const value = String(form.get("value")); await savePlatformSetting(key, value); setRefresh((v) => v + 1); event.currentTarget.reset(); }}><h2>Add or update</h2><label>Setting key<input name="key" required placeholder="platform.name" /></label><label>Value<input name="value" required /></label><button className="s3-primary">Save setting</button><p className="s3-help">Secrets and provider credentials are intentionally unavailable here.</p></form></div>}</>;
   if (section === "system-health") return <><PageHeader eyebrow="Live readiness checks" title="System health" />{health.loading ? <Loading /> : health.error || !health.data ? <ErrorPanel message={health.error} /> : <div className="s3-metrics">{Object.entries(health.data).map(([key, value]) => <Metric key={key} label={key.replace(/([A-Z])/g, " $1")} value={value} />)}</div>}</>;
   if (overview.loading) return <Loading />; if (overview.error || !overview.data) return <ErrorPanel message={overview.error} />; const m = overview.data.metrics;
-  return <><PageHeader eyebrow="Platform command center" title="Admin overview" /><div className="s3-metrics"><Metric label="Registered users" value={m.users} /><Metric label="Active users" value={m.activeUsers} help={overview.data.activeUserDefinition} /><Metric label="Organizers" value={m.organizers} /><Metric label="Events" value={m.events} /><Metric label="Published" value={m.publishedEvents} /><Metric label="Drafts" value={m.draftEvents} /><Metric label="Registrations" value={m.registrations} /><Metric label="Moderation backlog" value={m.moderationBacklog} /><Metric label="Verified revenue" value="Unavailable" /></div><section className="s3-panel"><h2>Recent administrative activity</h2><div className="s3-list">{overview.data.recentActivity.map((item) => <article key={item.id}><span><strong>{item.action}</strong><small>{item.resourceType}: {item.resourceId}</small></span><time>{formatDate(item.createdAt)}</time></article>)}</div>{!overview.data.recentActivity.length ? <Empty title="No administrative changes yet" text="Sensitive admin actions will be recorded here." /> : null}</section></>;
+  return <><PageHeader eyebrow="Platform command center" title="Admin overview" /><div className="s3-metrics"><Metric label="Registered users" value={m.users} /><Metric label="Active users" value={m.activeUsers} help={overview.data.activeUserDefinition} /><Metric label="Organizers" value={m.organizers} /><Metric label="Events" value={m.events} /><Metric label="Published" value={m.publishedEvents} /><Metric label="Drafts" value={m.draftEvents} /><Metric label="Registrations" value={m.registrations} /><Metric label="Moderation backlog" value={m.moderationBacklog} /><Metric label="Verified revenue" value={m.grossRevenue ?? (m.revenue === null ? "Unavailable" : m.revenue)} /></div><section className="s3-panel"><h2>Recent administrative activity</h2><div className="s3-list">{overview.data.recentActivity.map((item) => <article key={item.id}><span><strong>{item.action}</strong><small>{item.resourceType}: {item.resourceId}</small></span><time>{formatDate(item.createdAt)}</time></article>)}</div>{!overview.data.recentActivity.length ? <Empty title="No administrative changes yet" text="Sensitive admin actions will be recorded here." /> : null}</section></>;
 }
 
 export function Stage3Dashboard() {

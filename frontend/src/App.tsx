@@ -74,7 +74,8 @@ import {
   updateParticipantProfile,
   removeFavoriteEvent,
   requestPasswordReset,
-  cancelRegistrationForEvent
+  cancelRegistrationForEvent,
+  advancedSearch
 } from "./api";
 import type {
   AdminDashboard,
@@ -93,6 +94,7 @@ import type {
 } from "./types";
 import { EventBuilder } from "./EventBuilder";
 import { Stage3Dashboard } from "./Stage3Dashboard";
+import { CheckoutModal, CheckoutCallbackPage, SocialShareModal } from "./Checkout";
 
 const toBase64 = (file: File): Promise<string> =>
   new Promise((resolve, reject) => {
@@ -356,6 +358,9 @@ function SearchExperience({
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<DiscoveryMode>(initialMode);
   const [results, setResults] = useState<Event[]>([]);
+  const [priceFilter, setPriceFilter] = useState<"any" | "free" | "paid">("any");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [sortBy, setSortBy] = useState<"published" | "popular" | "soonest" | "relevant" | "price_asc" | "price_desc">("soonest");
 
   useEffect(() => {
     setMode(initialMode);
@@ -363,13 +368,24 @@ function SearchExperience({
 
   useEffect(() => {
     let active = true;
-    searchEvents(query, mode, { countryCode, interests }).then((payload) => {
+    advancedSearch({
+      q: query || undefined,
+      mode,
+      category: categoryFilter || undefined,
+      priceMode: priceFilter === "any" ? undefined : priceFilter,
+      sortBy,
+      countryCode
+    }).then((payload) => {
       if (active) setResults(payload.results);
+    }).catch(() => {
+      if (active) {
+        searchEvents(query, mode, { countryCode, interests }).then((p) => setResults(p.results)).catch(() => {});
+      }
     });
     return () => {
       active = false;
     };
-  }, [query, mode, countryCode, interests.join(",")]);
+  }, [query, mode, countryCode, categoryFilter, priceFilter, sortBy, interests.join(",")]);
 
   const suggestions = useMemo(() => {
     if (!query) return ["Lagos startups", "AI summit", "Online workshops", "Canada career"];
@@ -398,6 +414,53 @@ function SearchExperience({
               {suggestion}
             </button>
           ))}
+        </div>
+        <div className="filter-row" style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "12px", alignItems: "center" }}>
+          <select
+            value={categoryFilter}
+            onChange={(e) => setCategoryFilter(e.target.value)}
+            style={{ padding: "6px 12px", borderRadius: "8px", border: "1px solid var(--border-color, #e2e8f0)", background: "var(--card-bg, #fff)", color: "inherit", fontSize: "0.85rem" }}
+            aria-label="Category filter"
+          >
+            <option value="">All Categories</option>
+            <option value="Technology">Technology</option>
+            <option value="Design">Design</option>
+            <option value="Startup">Startup</option>
+            <option value="Community">Community</option>
+            <option value="Leadership">Leadership</option>
+            <option value="Creative">Creative</option>
+          </select>
+
+          <select
+            value={priceFilter}
+            onChange={(e) => setPriceFilter(e.target.value as "any" | "free" | "paid")}
+            style={{ padding: "6px 12px", borderRadius: "8px", border: "1px solid var(--border-color, #e2e8f0)", background: "var(--card-bg, #fff)", color: "inherit", fontSize: "0.85rem" }}
+            aria-label="Price filter"
+          >
+            <option value="any">All Prices</option>
+            <option value="free">Free Events</option>
+            <option value="paid">Paid Tickets</option>
+          </select>
+
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value as "soonest" | "relevant" | "popular")}
+            style={{ padding: "6px 12px", borderRadius: "8px", border: "1px solid var(--border-color, #e2e8f0)", background: "var(--card-bg, #fff)", color: "inherit", fontSize: "0.85rem" }}
+            aria-label="Sort events"
+          >
+            <option value="soonest">Date: Soonest First</option>
+            <option value="relevant">Relevance</option>
+            <option value="popular">Most Popular</option>
+          </select>
+
+          {(categoryFilter || priceFilter !== "any" || sortBy !== "soonest") ? (
+            <button
+              onClick={() => { setCategoryFilter(""); setPriceFilter("any"); setSortBy("soonest"); }}
+              style={{ padding: "4px 8px", fontSize: "0.8rem", borderRadius: "6px", background: "none", border: "1px solid var(--border-color, #cbd5e1)", cursor: "pointer" }}
+            >
+              Reset Filters
+            </button>
+          ) : null}
         </div>
       </div>
       <div className="live-results">
@@ -872,6 +935,9 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
   const [liveEvent, setLiveEvent] = useState(event);
   const [isRegistered, setIsRegistered] = useState(data.isRegistered ?? false);
   const [ticketAction, setTicketAction] = useState<string | null>(null);
+  const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [selectedTicketTier, setSelectedTicketTier] = useState<string | undefined>();
+  const [isShareOpen, setIsShareOpen] = useState(false);
   const auth = useAuthSession();
   const navigate = useNavigate();
   const canUseAttendeeActions = Boolean(auth.user && auth.token && auth.user.role !== "admin");
@@ -879,7 +945,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
   const isCancelled = event.status === "cancelled";
   const isSoldOut = event.status === "sold-out" || (event.capacity !== null && event.capacity !== undefined && event.reservedCount >= event.capacity);
   const registrationMode = event.registration?.mode ?? "free";
-  const registrationDisabled = isCancelled || isSoldOut || registrationMode === "disabled" || registrationMode === "paid";
+  const registrationDisabled = isCancelled || isSoldOut || registrationMode === "disabled";
   const calendarStart = new Date(shownEvent.startsAt);
   const calendarEnd = shownEvent.endsAt ? new Date(shownEvent.endsAt) : new Date(calendarStart.getTime() + 2 * 60 * 60 * 1000);
   const calendarStamp = (date: Date) => date.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
@@ -919,6 +985,15 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             <button
               disabled={registrationDisabled && !isRegistered}
               onClick={async () => {
+                if (registrationMode === "paid") {
+                  if (!auth.token) {
+                    navigate("/login");
+                  } else {
+                    setSelectedTicketTier(undefined);
+                    setIsCheckoutOpen(true);
+                  }
+                  return;
+                }
                 if (canUseAttendeeActions && auth.token) {
                   if (isRegistered) {
                     await cancelRegistrationForEvent(auth.token, shownEvent.slug);
@@ -938,7 +1013,7 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               }}
             >
               {isRegistered ? <XCircle size={18} /> : <Ticket size={18} />}
-              {isCancelled ? "Cancelled" : registrationMode === "paid" ? "Checkout coming soon" : registrationMode === "disabled" ? "Registration closed" : isSoldOut ? "Sold out" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : "Reserve spot"}
+              {isCancelled ? "Cancelled" : registrationMode === "paid" ? "Get Tickets" : registrationMode === "disabled" ? "Registration closed" : isSoldOut ? "Sold out" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : "Reserve spot"}
             </button>
             {canUseAttendeeActions && auth.token ? (
               auth.user?.favorites.includes(shownEvent.slug) ? (
@@ -1023,8 +1098,13 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             {shownEvent.country}
           </span>
           <span>
-            <Share2 size={17} />
-            {shownEvent.venue}
+            <button
+              type="button"
+              style={{ display: "inline-flex", alignItems: "center", gap: "6px", border: "none", background: "transparent", cursor: "pointer", color: "inherit", font: "inherit", padding: 0 }}
+              onClick={() => setIsShareOpen(true)}
+            >
+              <Share2 size={17} /> Share Event
+            </button>
           </span>
         </aside>
       </section>
@@ -1033,7 +1113,39 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
 
       {shownEvent.speakers?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>Speakers</span><h2>Meet the people on stage.</h2></div><div className="speaker-grid">{shownEvent.speakers.map((speaker) => <article key={speaker.id}>{speaker.photo ? <img src={speaker.photo} alt={speaker.name} loading="lazy"/> : null}<h3>{speaker.name}</h3><strong>{speaker.role}{speaker.organization ? ` · ${speaker.organization}` : ""}</strong><p>{speaker.biography}</p></article>)}</div></section> : null}
 
-      {shownEvent.tickets?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>Access</span><h2>Choose your ticket.</h2></div><div className="ticket-grid">{shownEvent.tickets.map((ticket) => <article key={ticket.id ?? ticket.name}><h3>{ticket.name}</h3><strong>{ticket.priceMinor ? `${ticket.currency} ${(ticket.priceMinor / 100).toLocaleString()}` : "Free"}</strong><p>{ticket.description}</p><small>{ticket.capacity ? `${Math.max(0, ticket.capacity - (ticket.reservedCount ?? 0))} remaining` : "No fixed limit"}</small></article>)}</div></section> : null}
+      {shownEvent.tickets?.length ? (
+        <section className="section-wrap event-section">
+          <div className="section-heading">
+            <span>Access</span>
+            <h2>Choose your ticket.</h2>
+          </div>
+          <div className="ticket-grid">
+            {shownEvent.tickets.map((ticket) => (
+              <article key={ticket.id ?? ticket.name}>
+                <h3>{ticket.name}</h3>
+                <strong>{ticket.priceMinor ? `${ticket.currency} ${(ticket.priceMinor / 100).toLocaleString()}` : "Free"}</strong>
+                <p>{ticket.description}</p>
+                <small>{ticket.capacity ? `${Math.max(0, ticket.capacity - (ticket.reservedCount ?? 0))} remaining` : "No fixed limit"}</small>
+                <button
+                  type="button"
+                  className="s3-primary"
+                  style={{ marginTop: "12px", width: "100%" }}
+                  onClick={() => {
+                    if (!auth.token) {
+                      navigate("/login");
+                    } else {
+                      setSelectedTicketTier(ticket.id);
+                      setIsCheckoutOpen(true);
+                    }
+                  }}
+                >
+                  {ticket.priceMinor ? "Buy Ticket" : "Select Ticket"}
+                </button>
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {shownEvent.faqs?.length ? <section className="section-wrap event-section"><div className="section-heading"><span>FAQ</span><h2>Good to know.</h2></div><div className="faq-list">{shownEvent.faqs.map((faq) => <details key={faq.id}><summary>{faq.question}</summary><p>{faq.answer}</p></details>)}</div></section> : null}
 
@@ -1045,6 +1157,21 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
           </div>
           <div className="event-grid compact">{related.map((item) => <EventCard event={item} key={item.id} />)}</div>
         </section>
+      ) : null}
+
+      {isCheckoutOpen ? (
+        <CheckoutModal
+          event={shownEvent}
+          user={auth.user}
+          initialTicketTypeId={selectedTicketTier}
+          onClose={() => setIsCheckoutOpen(false)}
+        />
+      ) : null}
+      {isShareOpen ? (
+        <SocialShareModal
+          event={shownEvent}
+          onClose={() => setIsShareOpen(false)}
+        />
       ) : null}
     </main>
   );
@@ -2112,6 +2239,7 @@ function App() {
       <Route path="/organizer/manage" element={<OrganizerDashboardPage />} />
       <Route path="/organizer/*" element={<Stage3Dashboard />} />
       <Route path="/admin/*" element={<Stage3Dashboard />} />
+      <Route path="/checkout/callback" element={<CheckoutCallbackPage />} />
       <Route path="/events/:slug" element={<EventPage />} />
       <Route path="/organizers/:slug" element={<OrganizerPage />} />
       <Route path="/404" element={<NotFoundPage />} />

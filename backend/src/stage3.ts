@@ -7,6 +7,10 @@ import { prisma, isDatabaseReady } from "./db.js";
 import { publicEvent } from "./events.js";
 import { asyncHandler, HttpError } from "./http.js";
 import { hashToken } from "./security.js";
+import { paymentService } from "./payments/service.js";
+import { defaultPaymentProvider } from "./payments/paystack.js";
+import { emailService } from "./notifications/email.js";
+import { getWorkerStatus } from "./worker.js";
 
 const pageSchema = z.coerce.number().int().min(1).max(100000).default(1);
 const limitSchema = z.coerce.number().int().min(1).max(100).default(25);
@@ -115,13 +119,14 @@ export function registerStage3Routes(app: Express) {
     const confirmed = registrations.filter((item) => item.status === "active" && item.approvalStatus === "approved");
     const checkedInIds = new Set(registrations.filter((item) => item.checkedIn).map((item) => item.id));
     const now = Date.now();
+    const revenue = await paymentService.getOrganizerRevenueMetrics(organizerSlug(user));
     response.json({
       range: { from, to },
       metrics: {
         totalEvents: events.length, upcomingEvents: events.filter((item) => new Date(item.startsAt).getTime() >= now && !["cancelled", "archived", "trashed"].includes(item.status)).length,
         publishedEvents: events.filter((item) => item.status === "published").length, draftEvents: events.filter((item) => item.status === "draft").length, cancelledEvents: events.filter((item) => item.status === "cancelled").length,
         totalRegistrations: registrations.length, confirmedAttendees: confirmed.reduce((sum, item) => sum + item.quantity, 0), checkedInAttendees: confirmed.filter((item) => checkedInIds.has(item.id)).reduce((sum, item) => sum + item.quantity, 0),
-        ticketsIssued: await prisma.ticket.count({ where: { eventId: { in: events.map((item) => item.id) }, status: "valid" } }), availableCapacity: events.reduce((sum, item) => sum + Math.max(0, (item.capacity ?? item.reservedCount) - item.reservedCount), 0), grossRevenue: null
+        ticketsIssued: await prisma.ticket.count({ where: { eventId: { in: events.map((item) => item.id) }, status: "valid" } }), availableCapacity: events.reduce((sum, item) => sum + Math.max(0, (item.capacity ?? item.reservedCount) - item.reservedCount), 0), grossRevenue: revenue.grossMinor
       },
       upcoming: events.filter((item) => new Date(item.startsAt).getTime() >= now).sort((a, b) => new Date(a.startsAt).getTime() - new Date(b.startsAt).getTime()).slice(0, 5).map((event) => publicEvent(event, [], true)),
       recentActivity: checkIns.slice(0, 10)
@@ -210,9 +215,38 @@ export function registerStage3Routes(app: Express) {
     const events = await ownedEvents(response.locals.user as User);
     const selected = typeof request.query.event === "string" ? events.filter((event) => event.slug === request.query.event) : events;
     const registrations = await prisma.registration.findMany({ where: { eventSlug: { in: selected.map((item) => item.slug) } }, orderBy: { registeredAt: "asc" } });
-    const byEvent = selected.map((event) => { const rows = registrations.filter((item) => item.eventSlug === event.slug); const confirmed = rows.filter((item) => item.status === "active" && item.approvalStatus === "approved"); const checkedIn = confirmed.filter((item) => item.checkedIn); return { eventSlug: event.slug, title: event.title, registrations: rows.length, confirmed: confirmed.length, cancelled: rows.filter((item) => item.status === "cancelled").length, waitlisted: rows.filter((item) => item.approvalStatus === "waitlisted").length, checkedIn: checkedIn.length, checkInRate: confirmed.length ? checkedIn.length / confirmed.length : 0, remainingCapacity: event.capacity === null ? null : Math.max(0, event.capacity - event.reservedCount), conversionRate: null, revenue: null }; });
+    const revMetrics = await paymentService.getOrganizerRevenueMetrics(organizerSlug(response.locals.user as User));
+    const byEvent = selected.map((event) => {
+      const rows = registrations.filter((item) => item.eventSlug === event.slug);
+      const confirmed = rows.filter((item) => item.status === "active" && item.approvalStatus === "approved");
+      const checkedIn = confirmed.filter((item) => item.checkedIn);
+      const evRev = revMetrics.byEvent.find((e) => e.eventId === event.id);
+      return {
+        eventSlug: event.slug,
+        title: event.title,
+        registrations: rows.length,
+        confirmed: confirmed.length,
+        cancelled: rows.filter((item) => item.status === "cancelled").length,
+        waitlisted: rows.filter((item) => item.approvalStatus === "waitlisted").length,
+        checkedIn: checkedIn.length,
+        checkInRate: confirmed.length ? checkedIn.length / confirmed.length : 0,
+        remainingCapacity: event.capacity === null ? null : Math.max(0, event.capacity - event.reservedCount),
+        conversionRate: null,
+        revenue: evRev ? evRev.netMinor : 0
+      };
+    });
     const trend = Object.entries(registrations.reduce<Record<string, number>>((acc, item) => { const day = item.registeredAt.slice(0, 10); acc[day] = (acc[day] ?? 0) + 1; return acc; }, {})).map(([date, count]) => ({ date, count }));
-    response.json({ byEvent, trend, revenue: { configured: false, currencies: [], gross: null, refunds: null, net: null } });
+    response.json({
+      byEvent,
+      trend,
+      revenue: {
+        configured: revMetrics.configured,
+        currencies: revMetrics.currencies,
+        gross: revMetrics.grossMinor,
+        refunds: revMetrics.refundedMinor,
+        net: revMetrics.netMinor
+      }
+    });
   }));
 
   app.get("/api/stage3/organizer/announcements", requireOrganizer, requireOrganizationPermission, asyncHandler(async (_request, response) => {
@@ -270,10 +304,11 @@ export function registerStage3Routes(app: Express) {
 
   app.get("/api/stage3/admin/overview", requireAdmin, asyncHandler(async (_request, response) => {
     const since = new Date(Date.now() - 30 * 86400000);
-    const [users, activeUsers, organizers, events, published, drafts, registrations, moderation, reports, audit] = await Promise.all([
-      prisma.user.count(), prisma.user.count({ where: { lastActiveAt: { gte: since }, accountStatus: "active" } }), prisma.organizer.count(), prisma.event.count({ where: { deletedAt: null } }), prisma.event.count({ where: { status: "published", deletedAt: null } }), prisma.event.count({ where: { status: "draft", deletedAt: null } }), prisma.registration.count(), prisma.moderationReport.count({ where: { status: { in: ["open", "under_review", "escalated"] } } }), prisma.moderationReport.count(), prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 10 })
+    const [users, activeUsers, organizers, events, published, drafts, registrations, moderation, reports, audit, adminFin] = await Promise.all([
+      prisma.user.count(), prisma.user.count({ where: { lastActiveAt: { gte: since }, accountStatus: "active" } }), prisma.organizer.count(), prisma.event.count({ where: { deletedAt: null } }), prisma.event.count({ where: { status: "published", deletedAt: null } }), prisma.event.count({ where: { status: "draft", deletedAt: null } }), prisma.registration.count(), prisma.moderationReport.count({ where: { status: { in: ["open", "under_review", "escalated"] } } }), prisma.moderationReport.count(), prisma.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 10 }),
+      paymentService.getAdminFinancialOverview()
     ]);
-    response.json({ metrics: { users, activeUsers, organizers, events, publishedEvents: published, draftEvents: drafts, registrations, moderationBacklog: moderation, reports, revenue: null }, recentActivity: audit, activeUserDefinition: "Active account with authenticated activity in the last 30 days" });
+    response.json({ metrics: { users, activeUsers, organizers, events, publishedEvents: published, draftEvents: drafts, registrations, moderationBacklog: moderation, reports, revenue: adminFin.totalNetMinor }, recentActivity: audit, activeUserDefinition: "Active account with authenticated activity in the last 30 days" });
   }));
   app.get("/api/stage3/admin/users", requireAdmin, asyncHandler(async (request, response) => {
     const { page, limit, skip } = pagination(request); const q = typeof request.query.q === "string" ? request.query.q.trim() : ""; const role = typeof request.query.role === "string" ? request.query.role : undefined; const status = typeof request.query.status === "string" ? request.query.status : undefined;
@@ -304,5 +339,25 @@ export function registerStage3Routes(app: Express) {
   app.get("/api/stage3/admin/audit-logs", requireAdmin, asyncHandler(async (request, response) => { const { page, limit, skip } = pagination(request); const action = typeof request.query.action === "string" ? request.query.action : undefined; const resourceType = typeof request.query.resourceType === "string" ? request.query.resourceType : undefined; const where = { ...(action ? { action: { contains: action } } : {}), ...(resourceType ? { resourceType } : {}) }; const [items, total] = await Promise.all([prisma.auditLog.findMany({ where, skip, take: limit, orderBy: { createdAt: "desc" } }), prisma.auditLog.count({ where })]); response.json({ items, pagination: { page, limit, total } }); }));
   app.get("/api/stage3/admin/settings", requireAdmin, asyncHandler(async (_request, response) => response.json(await prisma.platformSetting.findMany({ orderBy: { key: "asc" } }))));
   app.put("/api/stage3/admin/settings/:key", requireAdmin, asyncHandler(async (request, response) => { const actor = response.locals.user as User; const input = settingSchema.parse(request.body); const key = String(request.params.key).slice(0, 120); const previous = await prisma.platformSetting.findUnique({ where: { key } }); const setting = await prisma.platformSetting.upsert({ where: { key }, update: { value: input.value as Prisma.InputJsonValue, description: input.description, updatedById: actor.id }, create: { key, value: input.value as Prisma.InputJsonValue, description: input.description, updatedById: actor.id } }); await writeAudit(request, actor, "platform_setting.updated", "platform_setting", setting.id, { key, hadPreviousValue: Boolean(previous) }); response.json({ setting }); }));
-  app.get("/api/stage3/admin/system-health", requireAdmin, asyncHandler(async (_request, response) => { let database = false; try { await prisma.$runCommandRaw({ ping: 1 }); database = true; } catch { database = false; } response.json({ api: "operational", database: database && isDatabaseReady() ? "ready" : "unavailable", notifications: process.env.EMAIL_WEBHOOK_URL ? "configured" : "not_configured", payments: "not_configured", backgroundJobs: process.env.SCHEDULER_SECRET ? "scheduler_endpoint_configured" : "not_configured", checkedAt: new Date() }); }));
+  app.get("/api/stage3/admin/system-health", requireAdmin, asyncHandler(async (_request, response) => {
+    let database = false;
+    try {
+      await prisma.$runCommandRaw({ ping: 1 });
+      database = true;
+    } catch {
+      database = false;
+    }
+    const emailStatus = emailService.getStatus();
+    const paystackConfigured = defaultPaymentProvider.isConfigured();
+    const workerStatus = getWorkerStatus();
+
+    response.json({
+      api: "operational",
+      database: database && isDatabaseReady() ? "ready" : "unavailable",
+      notifications: emailStatus.configured ? `${emailStatus.provider}_configured` : "not_configured",
+      payments: paystackConfigured ? "paystack_configured" : (process.env.NODE_ENV === "test" ? "test_mode" : "not_configured"),
+      backgroundJobs: workerStatus.running ? "worker_active" : (process.env.SCHEDULER_SECRET ? "scheduler_endpoint_configured" : "manual"),
+      checkedAt: new Date()
+    });
+  }));
 }
