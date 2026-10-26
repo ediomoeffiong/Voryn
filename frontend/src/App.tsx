@@ -980,8 +980,15 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
             <p>{shownEvent.summary}</p>
           </div>
           <aside className="ticket-panel">
-            <span className={`status-pill ${shownEvent.status}`}>{shownEvent.status.replace("-", " ")}</span>
-            <strong>{shownEvent.priceLabel}</strong>
+            <div className="ticket-panel-header">
+              <span className={`status-pill ${shownEvent.status}`}>
+                <span className="status-dot" />
+                {shownEvent.status.replace("-", " ")}
+              </span>
+            </div>
+            <div className="ticket-price-box">
+              <strong>{shownEvent.priceLabel}</strong>
+            </div>
             <button
               disabled={registrationDisabled && !isRegistered}
               onClick={async () => {
@@ -1013,7 +1020,21 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               }}
             >
               {isRegistered ? <XCircle size={18} /> : <Ticket size={18} />}
-              {isCancelled ? "Cancelled" : registrationMode === "paid" ? "Get Tickets" : registrationMode === "disabled" ? "Registration closed" : isSoldOut ? "Sold out" : canUseAttendeeActions ? (isRegistered ? "Cancel Registration" : "Register") : "Reserve spot"}
+              <span>
+                {isCancelled
+                  ? "Cancelled"
+                  : registrationMode === "paid"
+                  ? "Get Tickets"
+                  : registrationMode === "disabled"
+                  ? "Registration closed"
+                  : isSoldOut
+                  ? "Sold out"
+                  : canUseAttendeeActions
+                  ? isRegistered
+                    ? "Cancel Registration"
+                    : "Register"
+                  : "Reserve spot"}
+              </span>
             </button>
             {canUseAttendeeActions && auth.token ? (
               auth.user?.favorites.includes(shownEvent.slug) ? (
@@ -1025,7 +1046,8 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
                     setTicketAction("Event unsaved");
                   }}
                 >
-                  <Heart size={18} fill="currentColor" className="heart-icon-filled" /> Unsave
+                  <Heart size={18} fill="currentColor" className="heart-icon-filled" />
+                  <span>Unsave</span>
                 </button>
               ) : (
                 <button
@@ -1036,27 +1058,50 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
                     setTicketAction("Event saved");
                   }}
                 >
-                  <Heart size={18} /> Save
+                  <Heart size={18} />
+                  <span>Save</span>
                 </button>
               )
             ) : (
-              <Link to="/login">
-                <Shield size={18} /> Log in for tickets
+              <Link to="/login" className="ticket-btn-link secondary">
+                <Shield size={18} />
+                <span>Log in for tickets</span>
               </Link>
             )}
-            <div className="calendar-actions">
-              <a href={googleCalendar} target="_blank" rel="noopener noreferrer">
-                <CalendarPlus size={16} /> Google
-              </a>
-              <a href={outlookCalendar} target="_blank" rel="noopener noreferrer">
-                Outlook
-              </a>
-              <a href={`/api/calendar/${shownEvent.slug}.ics`}>Apple ICS</a>
+            <div className="calendar-section">
+              <span className="calendar-label">
+                <CalendarClock size={13} /> Add to Calendar
+              </span>
+              <div className="calendar-actions">
+                <a href={googleCalendar} target="_blank" rel="noopener noreferrer" title="Add to Google Calendar">
+                  <CalendarPlus size={15} /> <span>Google</span>
+                </a>
+                <a href={outlookCalendar} target="_blank" rel="noopener noreferrer" title="Add to Outlook Calendar">
+                  <CalendarDays size={15} /> <span>Outlook</span>
+                </a>
+                <a href={`/api/calendar/${shownEvent.slug}.ics`} download={`${shownEvent.slug}.ics`} title="Download Apple / iCal (.ics)">
+                  <Download size={15} /> <span>Apple ICS</span>
+                </a>
+              </div>
             </div>
-            <small>
-              {shownEvent.rsvpCount.toLocaleString()} RSVPs / {shownEvent.ticketSalesCount.toLocaleString()} tickets sold
-            </small>
-            {ticketAction ? <small>{ticketAction}</small> : null}
+            <div className="ticket-panel-footer">
+              <div className="ticket-stats">
+                <Users size={14} />
+                <span>
+                  <strong>{shownEvent.rsvpCount.toLocaleString()}</strong> RSVPs
+                </span>
+                <span className="ticket-stat-dot">•</span>
+                <span>
+                  <strong>{shownEvent.ticketSalesCount.toLocaleString()}</strong> tickets sold
+                </span>
+              </div>
+              {ticketAction ? (
+                <div className="ticket-feedback-toast">
+                  <CheckCircle2 size={13} />
+                  <span>{ticketAction}</span>
+                </div>
+              ) : null}
+            </div>
           </aside>
         </div>
       </section>
