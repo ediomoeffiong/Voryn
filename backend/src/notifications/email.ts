@@ -128,9 +128,12 @@ export class EmailService {
       }
     }
 
-    // 3. Test or unconfigured mock mode
-    if (process.env.NODE_ENV === "test") {
+    // 3. Test or unconfigured development mock mode
+    if (process.env.NODE_ENV === "test" || process.env.NODE_ENV !== "production") {
       this.sentEmailsForTesting.push({ ...options, sentAt: new Date() });
+      if (process.env.NODE_ENV !== "test") {
+        console.info(`[Email Service Dev] Delivery to ${options.to}: ${options.subject}`);
+      }
       return { success: true, messageId: `mock_${Date.now()}` };
     }
 

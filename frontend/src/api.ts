@@ -221,8 +221,12 @@ export function removeFavoriteEvent(token: string, slug: string) {
   return request<ParticipantDashboard>(`/api/portal/participant/favorites/${slug}`, { method: "DELETE", token });
 }
 
-export function registerForEvent(token: string, slug: string) {
-  return request<{ dashboard: ParticipantDashboard }>(`/api/portal/participant/register/${slug}`, { method: "POST", token });
+export function registerForEvent(token: string, slug: string, options?: { ticketTypeId?: string; quantity?: number; answers?: Record<string, unknown> }) {
+  return request<{ dashboard: ParticipantDashboard; registration: unknown }>(`/api/portal/participant/register/${slug}`, {
+    method: "POST",
+    token,
+    body: options ? JSON.stringify(options) : undefined
+  });
 }
 
 export function cancelRegistrationForEvent(token: string, slug: string) {

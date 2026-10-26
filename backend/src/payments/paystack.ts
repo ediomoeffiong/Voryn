@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { HttpError } from "../http.js";
+import { prisma } from "../db.js";
 import type {
   Currency,
   InitializePaymentParams,
@@ -97,18 +98,33 @@ export class PaystackProvider implements PaymentProvider {
 
   async verifyTransaction(reference: string): Promise<VerifyTransactionResult> {
     if (this.isMockMode()) {
+      let mockAmount = 100000;
+      let mockCurrency = "NGN";
+      let mockEmail = "tester@example.com";
+      try {
+        const order = await prisma.ticketOrder.findFirst({
+          where: { paymentReference: reference }
+        });
+        if (order) {
+          mockAmount = order.totalMinor;
+          mockCurrency = order.currency;
+          mockEmail = order.customerEmail;
+        }
+      } catch {
+        // Fallback to default mock amount
+      }
       return {
         status: "success",
         reference,
         providerReference: `pstk_${reference}`,
-        amountMinor: 100000,
-        currency: "NGN",
-        customerEmail: "tester@example.com",
+        amountMinor: mockAmount,
+        currency: mockCurrency,
+        customerEmail: mockEmail,
         channel: "card",
         gatewayResponse: "Successful (Test Mode)",
         paidAt: new Date(),
-        feesMinor: 1500,
-        rawPayload: { test: true, reference, status: "success" }
+        feesMinor: Math.round(mockAmount * 0.015),
+        rawPayload: { test: true, reference, status: "success", amount: mockAmount }
       };
     }
 

@@ -30,15 +30,17 @@ export function CheckoutModal({
 }) {
   const navigate = useNavigate();
   const availableTickets = (event.tickets || []).filter(
-    (t) => t.visibility === "public" && t.availability === "available" && (t.capacity == null || (t.reservedCount ?? 0) < t.capacity)
+    (t) => t.visibility === "public" && t.availability === "available" && ((t.priceMinor || 0) > 0) && (t.capacity == null || (t.reservedCount ?? 0) < t.capacity)
   );
 
   const [quantities, setQuantities] = useState<Record<string, number>>(() => {
     const initial: Record<string, number> = {};
     if (initialTicketTypeId) {
-      initial[initialTicketTypeId] = 1;
+      const ticket = availableTickets.find((t) => (t.id || t.name) === initialTicketTypeId);
+      if (ticket) initial[initialTicketTypeId] = ticket.minPerOrder || 1;
     } else if (availableTickets.length > 0) {
-      initial[availableTickets[0].id || availableTickets[0].name] = 1;
+      const first = availableTickets[0];
+      initial[first.id || first.name] = first.minPerOrder || 1;
     }
     return initial;
   });
@@ -46,10 +48,16 @@ export function CheckoutModal({
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
-  const updateQuantity = (ticketId: string, delta: number, min = 1, max = 10) => {
+  const updateQuantity = (ticketId: string, delta: number, minOrder = 1, maxOrder = 10) => {
     setQuantities((prev) => {
       const current = prev[ticketId] || 0;
-      const next = Math.max(0, Math.min(current + delta, max));
+      let next = current + delta;
+      if (delta > 0 && current === 0) {
+        next = Math.max(1, minOrder);
+      } else if (delta < 0 && next < minOrder) {
+        next = 0;
+      }
+      next = Math.max(0, Math.min(next, maxOrder));
       return { ...prev, [ticketId]: next };
     });
   };
@@ -144,6 +152,7 @@ export function CheckoutModal({
               availableTickets.map((ticket) => {
                 const key = ticket.id || ticket.name;
                 const qty = quantities[key] || 0;
+                const min = ticket.minPerOrder || 1;
                 const max = ticket.maxPerOrder || 10;
                 const priceFormatted = ticket.priceMinor
                   ? `${ticket.currency} ${(ticket.priceMinor / 100).toLocaleString(undefined, {
@@ -168,7 +177,7 @@ export function CheckoutModal({
                         type="button"
                         className="qty-btn"
                         disabled={qty <= 0 || isProcessing}
-                        onClick={() => updateQuantity(key, -1, 0, max)}
+                        onClick={() => updateQuantity(key, -1, min, max)}
                         aria-label={`Decrease ${ticket.name} quantity`}
                       >
                         -
@@ -180,7 +189,7 @@ export function CheckoutModal({
                         type="button"
                         className="qty-btn"
                         disabled={qty >= max || isProcessing}
-                        onClick={() => updateQuantity(key, 1, 0, max)}
+                        onClick={() => updateQuantity(key, 1, min, max)}
                         aria-label={`Increase ${ticket.name} quantity`}
                       >
                         +
@@ -314,9 +323,15 @@ export function CheckoutCallbackPage() {
             <Link to="/search" className="button secondary">
               Browse Other Events
             </Link>
-            <button onClick={() => window.history.back()} className="button primary">
-              Retry Payment
-            </button>
+            {order?.eventSlug ? (
+              <Link to={`/events/${order.eventSlug}`} className="button primary">
+                Retry Payment
+              </Link>
+            ) : (
+              <button onClick={() => navigate(-1)} className="button primary">
+                Go Back
+              </button>
+            )}
           </div>
         </div>
       </main>
@@ -354,7 +369,7 @@ export function CheckoutCallbackPage() {
         ) : null}
 
         <div className="action-buttons">
-          <Link to="/dashboard/participant" className="button primary">
+          <Link to="/dashboard/tickets" className="button primary">
             <TicketIcon size={18} /> View Ticket in Wallet
           </Link>
           <Link to={`/events/${order?.eventSlug}`} className="button secondary">

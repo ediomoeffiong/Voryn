@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, Route, Routes, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowRight,
   BadgeCheck,
@@ -1045,10 +1045,10 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
               </Link>
             )}
             <div className="calendar-actions">
-              <a href={googleCalendar} target="_blank">
+              <a href={googleCalendar} target="_blank" rel="noopener noreferrer">
                 <CalendarPlus size={16} /> Google
               </a>
-              <a href={outlookCalendar} target="_blank">
+              <a href={outlookCalendar} target="_blank" rel="noopener noreferrer">
                 Outlook
               </a>
               <a href={`/api/calendar/${shownEvent.slug}.ics`}>Apple ICS</a>
@@ -1130,16 +1130,28 @@ function EventPageContent({ data }: { data: { event: Event; related: Event[]; js
                   type="button"
                   className="s3-primary"
                   style={{ marginTop: "12px", width: "100%" }}
-                  onClick={() => {
+                  onClick={async () => {
                     if (!auth.token) {
                       navigate("/login");
-                    } else {
-                      setSelectedTicketTier(ticket.id);
-                      setIsCheckoutOpen(true);
+                      return;
                     }
+                    if (!ticket.priceMinor) {
+                      try {
+                        const result = await registerForEvent(auth.token, shownEvent.slug, { ticketTypeId: ticket.id });
+                        const updated = result.dashboard.history.find((item) => item.slug === shownEvent.slug);
+                        if (updated) setLiveEvent(updated);
+                        setIsRegistered(true);
+                        setTicketAction(`Registered for ${ticket.name}`);
+                      } catch (err) {
+                        setTicketAction(err instanceof Error ? err.message : "Registration failed");
+                      }
+                      return;
+                    }
+                    setSelectedTicketTier(ticket.id);
+                    setIsCheckoutOpen(true);
                   }}
                 >
-                  {ticket.priceMinor ? "Buy Ticket" : "Select Ticket"}
+                  {ticket.priceMinor ? "Buy Ticket" : isRegistered ? "Registered" : "Register Free"}
                 </button>
               </article>
             ))}
@@ -1300,7 +1312,7 @@ function AuthGate({ allowed, children }: { allowed: Role[]; children: (auth: Ret
 }
 
 function dashboardPath(user: User) {
-  return user.lastDashboard === "organizer" ? "/organizer" : user.lastDashboard === "admin" ? "/admin" : "/attendee";
+  return user.lastDashboard === "organizer" ? "/organizer" : user.lastDashboard === "admin" ? "/admin" : "/dashboard";
 }
 
 function AuthPage({
@@ -1523,7 +1535,8 @@ function OrganizerDashboardPage() {
 }
 
 function OrganizerDashboardContent({ token, user, setAuth, logout }: { token: string; user: User; setAuth: (token: string, user: User) => void; logout: () => void }) {
-  const [tab, setTab] = useState("Overview");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState(() => searchParams.get("tab") || "Create Event");
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const [editingEvent, setEditingEvent] = useState<Event | undefined>();
   const [refreshKey, setRefreshKey] = useState(0);
@@ -2027,8 +2040,8 @@ function ParticipantDashboardContent({ token, user, setAuth, logout }: { token: 
               <div className="portal-row" key={event.id}>
                   <strong>{event.title}</strong>
                   <span>{new Date(event.startsAt).toLocaleString()}</span>
-                  <a href={data.calendar[event.slug]?.google} target="_blank">Google</a>
-                  <a href={data.calendar[event.slug]?.outlook} target="_blank">Outlook</a>
+                  <a href={data.calendar[event.slug]?.google} target="_blank" rel="noopener noreferrer">Google</a>
+                  <a href={data.calendar[event.slug]?.outlook} target="_blank" rel="noopener noreferrer">Outlook</a>
                   <a href={data.calendar[event.slug]?.apple}>Apple ICS</a>
                   <button
                     onClick={async () => {
@@ -2233,8 +2246,8 @@ function App() {
       <Route path="/forgot-password" element={<PasswordResetPage />} />
       <Route path="/reset-password" element={<PasswordResetPage />} />
       <Route path="/change-password" element={<ChangePasswordPage />} />
-      <Route path="/attendee" element={<Stage3Dashboard />} />
-      <Route path="/participant" element={<Stage3Dashboard />} />
+      <Route path="/attendee" element={<Navigate to="/dashboard" replace />} />
+      <Route path="/participant" element={<Navigate to="/dashboard" replace />} />
       <Route path="/dashboard/*" element={<Stage3Dashboard />} />
       <Route path="/organizer/manage" element={<OrganizerDashboardPage />} />
       <Route path="/organizer/*" element={<Stage3Dashboard />} />

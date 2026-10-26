@@ -49,7 +49,7 @@ export function createApp() {
   });
 
   app.use(helmet({ crossOriginResourcePolicy: { policy: "cross-origin" } }));
-  app.use(cors({ origin(origin, callback) { if (!origin || origins.includes(origin)) return callback(null, true); callback(new HttpError(403, "CORS origin denied")); }, credentials: true, methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"], allowedHeaders: ["Content-Type", "X-CSRF-Token"] }));
+  app.use(cors({ origin(origin, callback) { if (!origin || origins.includes(origin)) return callback(null, true); callback(new HttpError(403, "CORS origin denied")); }, credentials: true, methods: ["GET", "HEAD", "PUT", "PATCH", "POST", "DELETE"], allowedHeaders: ["Content-Type", "X-CSRF-Token", "Authorization", "X-Request-ID", "X-Requested-With", "x-paystack-signature"], exposedHeaders: ["X-Request-ID"] }));
   app.use(express.json({
     limit: "1mb",
     verify: (req, _res, buf) => {

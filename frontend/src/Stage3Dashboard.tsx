@@ -433,7 +433,7 @@ function ParticipantView({ section }: { section: string }) {
   const { data, error, loading, reload } = useLoad<ParticipantDashboard>(() => getParticipantDashboard(""), []); const wallet = useLoad<WalletItem[]>(getWallet, []); const notifications = useLoad(getNotifications, []);
   if (loading) return <Loading />; if (error || !data) return <ErrorPanel message={error} />;
   if (section === "orders") return <ParticipantOrdersView />;
-  if (section === "tickets") return <><PageHeader eyebrow="Admission credentials" title="My tickets" actions={<button className="s3-secondary" onClick={() => window.print()}>Print wallet</button>} />{wallet.loading ? <Loading /> : wallet.error ? <ErrorPanel message={wallet.error} /> : wallet.data?.length ? <div className="s3-ticket-grid">{wallet.data.map((item) => <TicketCard item={item} key={item.registration.id} />)}</div> : <Empty title="No tickets yet" text="Confirmed free registrations and verified paid purchases appear here." />}</>;
+  if (section === "tickets" || section === "participant") return <><PageHeader eyebrow="Admission credentials" title="My tickets" actions={<button className="s3-secondary" onClick={() => window.print()}>Print wallet</button>} />{wallet.loading ? <Loading /> : wallet.error ? <ErrorPanel message={wallet.error} /> : wallet.data?.length ? <div className="s3-ticket-grid">{wallet.data.map((item) => <TicketCard item={item} key={item.registration.id} />)}</div> : <Empty title="No tickets yet" text="Confirmed free registrations and verified paid purchases appear here." />}</>;
   if (section === "notifications") return (
     <>
       <PageHeader eyebrow="Updates for you" title="Notifications" actions={

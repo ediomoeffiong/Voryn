@@ -34,10 +34,20 @@ export class PaymentService {
     const now = new Date();
     const ticketTypeIds = items.map((i) => i.ticketTypeId);
     const dbTicketTypes = await prisma.ticketType.findMany({
-      where: { id: { in: ticketTypeIds }, eventId: event.id }
+      where: {
+        eventId: event.id,
+        OR: [
+          { id: { in: ticketTypeIds } },
+          { name: { in: ticketTypeIds } }
+        ]
+      }
     });
 
-    const ticketMap = new Map(dbTicketTypes.map((t) => [t.id, t]));
+    const ticketMap = new Map<string, TicketType>();
+    for (const t of dbTicketTypes) {
+      ticketMap.set(t.id, t);
+      ticketMap.set(t.name, t);
+    }
     let subtotalMinor = 0;
     let totalQuantity = 0;
     let currency: Currency = "NGN";
@@ -95,20 +105,33 @@ export class PaymentService {
     const orderNumber = `ORD-${Date.now().toString(36).toUpperCase()}-${randomSuffix}`;
     const paymentReference = `VRY-${orderNumber}-${crypto.randomBytes(3).toString("hex").toUpperCase()}`;
 
-    // Perform atomic capacity updates
-    const eventUpdate = await prisma.event.updateMany({
-      where: {
-        id: event.id,
-        status: "published",
-        deletedAt: null,
-        reservedCount: event.reservedCount
-      },
-      data: {
-        reservedCount: { increment: totalQuantity }
+    // Perform atomic capacity updates with optimistic retry
+    let reserved = false;
+    for (let attempt = 0; attempt < 5 && !reserved; attempt++) {
+      const currentEvent = await prisma.event.findUnique({ where: { id: event.id } });
+      if (!currentEvent || currentEvent.deletedAt || currentEvent.status !== "published") {
+        throw new HttpError(409, "Event is no longer open for ticket purchase");
       }
-    });
+      if (currentEvent.capacity !== null && currentEvent.reservedCount + totalQuantity > currentEvent.capacity) {
+        throw new HttpError(409, "Event total capacity has been reached");
+      }
+      const eventUpdate = await prisma.event.updateMany({
+        where: {
+          id: event.id,
+          status: "published",
+          deletedAt: null,
+          reservedCount: currentEvent.reservedCount
+        },
+        data: {
+          reservedCount: { increment: totalQuantity }
+        }
+      });
+      if (eventUpdate.count === 1) {
+        reserved = true;
+      }
+    }
 
-    if (eventUpdate.count !== 1) {
+    if (!reserved) {
       throw new HttpError(409, "Event capacity changed; please refresh and try again");
     }
 
@@ -231,9 +254,9 @@ export class PaymentService {
     // 1. Check existing payment transaction for idempotency
     const existingTx = await prisma.paymentTransaction.findUnique({ where: { reference } });
     const order = await prisma.ticketOrder.findFirst({
-      where: {
-        OR: [{ paymentReference: reference }, { id: existingTx?.orderId }]
-      }
+      where: existingTx?.orderId
+        ? { OR: [{ paymentReference: reference }, { id: existingTx.orderId }] }
+        : { paymentReference: reference }
     });
 
     if (!order) {
@@ -386,6 +409,8 @@ export class PaymentService {
       });
     }
 
+    const finalTicketCode = registration.ticketCode || ticketCode;
+
     const ticket = await prisma.ticket.upsert({
       where: { registrationId: registration.id },
       update: {
@@ -397,8 +422,8 @@ export class PaymentService {
         eventId: event.id,
         ticketTypeId: orderItems[0]?.ticketTypeId,
         orderId: order.id,
-        codeHash: hashToken(ticketCode),
-        displayCode: ticketCode,
+        codeHash: hashToken(finalTicketCode),
+        displayCode: finalTicketCode,
         status: "valid"
       }
     });

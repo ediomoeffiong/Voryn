@@ -186,16 +186,29 @@ export async function searchEventsAdvanced(
       const now = new Date().toISOString();
       const where: Record<string, unknown> = {
         status: "published",
-        deletedAt: null,
-        startsAt: { gte: options.from || now }
+        deletedAt: null
       };
+
+      if (options.from && options.to) {
+        where.startsAt = { gte: options.from, lte: options.to };
+      } else if (options.from) {
+        where.startsAt = { gte: options.from };
+      } else if (options.to) {
+        where.startsAt = { lte: options.to };
+      } else {
+        where.startsAt = { gte: now };
+      }
 
       if (options.mode) where.mode = options.mode;
       if (options.citySlug) where.citySlug = options.citySlug;
       if (options.category) where.category = options.category;
       if (options.type) where.type = options.type;
       if (options.attendanceFormat) where.attendanceFormat = options.attendanceFormat;
-      if (options.to) where.startsAt = { ...(where.startsAt as object), lte: options.to };
+      if (options.priceMode === "free") {
+        where.priceLabel = { contains: "free", mode: "insensitive" };
+      } else if (options.priceMode === "paid") {
+        where.NOT = { priceLabel: { contains: "free", mode: "insensitive" } };
+      }
 
       if (query.trim()) {
         const q = query.trim();
